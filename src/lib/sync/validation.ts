@@ -1,6 +1,7 @@
 import { getEnv } from "@/lib/config/env";
 import type {
   JsonValue,
+  SyncAckBody,
   SyncPullBody,
   SyncPushBody,
   SyncStatusBody,
@@ -48,13 +49,21 @@ function optionalNonNegativeInteger(
   return value;
 }
 
-function optionalHash(value: unknown): string | null {
+function optionalHash(value: unknown, field = "clientHash"): string | null {
   const normalized = normalizeOptionalString(value);
   if (!normalized) return null;
   if (!/^[a-f0-9]{64}$/i.test(normalized)) {
-    throw invalidSyncBody("clientHash must be a SHA-256 hex string");
+    throw invalidSyncBody(`${field} must be a SHA-256 hex string`);
   }
   return normalized.toLowerCase();
+}
+
+function requireHash(value: unknown, field: string): string {
+  const normalized = optionalHash(value, field);
+  if (!normalized) {
+    throw invalidSyncBody(`${field} is required`);
+  }
+  return normalized;
 }
 
 function assertJsonValue(
@@ -190,5 +199,20 @@ export function validatePullBody(body: unknown): SyncPullBody {
     userId: normalizeOptionalString(body.userId),
     deviceId: requireNonEmptyString(body.deviceId, "deviceId"),
     clientRevision: optionalNonNegativeInteger(body.clientRevision, "clientRevision"),
+  };
+}
+
+export function validateAckBody(body: unknown): SyncAckBody {
+  assertBodyObject(body);
+  const revision = optionalNonNegativeInteger(body.revision, "revision");
+  if (revision === null) {
+    throw invalidSyncBody("revision is required");
+  }
+
+  return {
+    userId: normalizeOptionalString(body.userId),
+    deviceId: requireNonEmptyString(body.deviceId, "deviceId"),
+    revision,
+    payloadSha256: requireHash(body.payloadSha256, "payloadSha256"),
   };
 }

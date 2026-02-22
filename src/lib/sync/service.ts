@@ -4,6 +4,8 @@ import { getEnv } from "@/lib/config/env";
 import { jsonByteSize, sha256Json } from "@/lib/sync/hash";
 import { getSyncRepository, type SyncRepository } from "@/lib/sync/repository";
 import type {
+  SyncAckRequest,
+  SyncAckResponse,
   SyncPullRequest,
   SyncPullResponse,
   SyncPushRequest,
@@ -23,11 +25,66 @@ function updateDeviceHeartbeat(
   clientRevision: number | null,
   clientHash: string | null,
 ): void {
+  const previous = user.devices[deviceId];
   user.devices[deviceId] = {
+    lastAckRevision: previous?.lastAckRevision ?? null,
+    lastAckHash: previous?.lastAckHash ?? null,
+    lastAckAt: previous?.lastAckAt ?? null,
     lastSeenAt: nowIso(),
     lastClientRevision: clientRevision,
     lastClientHash: clientHash,
   };
+}
+
+function markDeviceAck(
+  user: UserSyncRecord,
+  deviceId: string,
+  revision: number,
+  payloadSha256: string,
+): void {
+  const seenAt = nowIso();
+  user.devices[deviceId] = {
+    lastSeenAt: seenAt,
+    lastClientRevision: revision,
+    lastClientHash: payloadSha256,
+    lastAckRevision: revision,
+    lastAckHash: payloadSha256,
+    lastAckAt: seenAt,
+  };
+}
+
+function deviceAckedSnapshot(device: UserSyncRecord["devices"][string], revision: number, hash: string): boolean {
+  if (device.lastAckHash && device.lastAckHash === hash) {
+    return true;
+  }
+  if (typeof device.lastAckRevision === "number" && device.lastAckRevision >= revision) {
+    return true;
+  }
+  return false;
+}
+
+function pruneDeliveredArchives(user: UserSyncRecord): void {
+  if (user.snapshots.length === 0) return;
+
+  for (const snapshot of user.snapshots) {
+    if (snapshot.archive === null) continue;
+
+    const targetDevices = Object.entries(user.devices).filter(
+      ([deviceId]) => deviceId !== snapshot.sourceDeviceId,
+    );
+
+    if (targetDevices.length === 0) {
+      continue;
+    }
+
+    const deliveredToAllTargets = targetDevices.every(([, device]) =>
+      deviceAckedSnapshot(device, snapshot.revision, snapshot.payloadSha256),
+    );
+
+    if (deliveredToAllTargets) {
+      snapshot.archive = null;
+    }
+  }
 }
 
 export async function getSyncStatus(
@@ -59,12 +116,15 @@ export async function getSyncStatus(
     const hasClientNewer = clientRevision > latest.revision;
     const sameHash = Boolean(req.clientHash && req.clientHash === latest.payloadSha256);
     const hashKnownAndDifferent = Boolean(req.clientHash && !sameHash);
+    const latestPayloadAvailable = latest.archive !== null;
 
     let shouldPull = false;
     let shouldPush = false;
     let reason = "in_sync";
 
-    if (hasServerNewer && !sameHash) {
+    if (hasServerNewer && !sameHash && !latestPayloadAvailable) {
+      reason = "server_snapshot_pruned";
+    } else if (hasServerNewer && !sameHash) {
       shouldPull = true;
       reason = "server_revision_newer";
     } else if (hasClientNewer) {
@@ -143,6 +203,7 @@ export async function pushSnapshot(
       user.snapshots = user.snapshots.slice(-retention);
     }
     user.latestSnapshot = user.snapshots[user.snapshots.length - 1] ?? null;
+    pruneDeliveredArchives(user);
 
     return {
       ok: true,
@@ -190,6 +251,18 @@ export async function pullSnapshot(
       };
     }
 
+    if (latest.archive === null) {
+      return {
+        ok: true,
+        hasUpdate: false,
+        userId: req.userId,
+        revision: latest.revision,
+        payloadSha256: latest.payloadSha256,
+        receivedAt: latest.receivedAt,
+        reason: "server_snapshot_pruned",
+      };
+    }
+
     return {
       ok: true,
       hasUpdate: true,
@@ -203,3 +276,80 @@ export async function pullSnapshot(
   });
 }
 
+export async function ackPulledSnapshot(
+  req: SyncAckRequest,
+  repository: SyncRepository = getSyncRepository(),
+): Promise<SyncAckResponse> {
+  return repository.withUserState(req.userId, (user) => {
+    const latest = user.latestSnapshot;
+    const snapshot =
+      user.snapshots.find((entry) => entry.revision === req.revision) ?? null;
+
+    if (!snapshot) {
+      const previous = user.devices[req.deviceId];
+      updateDeviceHeartbeat(
+        user,
+        req.deviceId,
+        previous?.lastClientRevision ?? null,
+        previous?.lastClientHash ?? null,
+      );
+
+      return {
+        ok: true,
+        accepted: false,
+        userId: req.userId,
+        deviceId: req.deviceId,
+        revision: req.revision,
+        payloadSha256: req.payloadSha256,
+        serverRevision: latest?.revision ?? 0,
+        serverHash: latest?.payloadSha256 ?? null,
+        isLatest: false,
+        reason: "unknown_revision",
+      };
+    }
+
+    if (snapshot.payloadSha256 !== req.payloadSha256) {
+      const previous = user.devices[req.deviceId];
+      updateDeviceHeartbeat(
+        user,
+        req.deviceId,
+        previous?.lastClientRevision ?? null,
+        previous?.lastClientHash ?? null,
+      );
+
+      return {
+        ok: true,
+        accepted: false,
+        userId: req.userId,
+        deviceId: req.deviceId,
+        revision: req.revision,
+        payloadSha256: req.payloadSha256,
+        serverRevision: latest?.revision ?? 0,
+        serverHash: latest?.payloadSha256 ?? null,
+        isLatest: false,
+        reason: "hash_mismatch_for_revision",
+      };
+    }
+
+    markDeviceAck(user, req.deviceId, snapshot.revision, snapshot.payloadSha256);
+    pruneDeliveredArchives(user);
+
+    const isLatest =
+      latest !== null &&
+      snapshot.revision === latest.revision &&
+      snapshot.payloadSha256 === latest.payloadSha256;
+
+    return {
+      ok: true,
+      accepted: true,
+      userId: req.userId,
+      deviceId: req.deviceId,
+      revision: snapshot.revision,
+      payloadSha256: snapshot.payloadSha256,
+      serverRevision: latest?.revision ?? 0,
+      serverHash: latest?.payloadSha256 ?? null,
+      isLatest,
+      reason: isLatest ? "acknowledged_latest_snapshot" : "acknowledged_stale_snapshot",
+    };
+  });
+}

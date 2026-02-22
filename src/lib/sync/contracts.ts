@@ -26,6 +26,13 @@ export interface SyncPullBody {
   clientRevision: number | null;
 }
 
+export interface SyncAckBody {
+  userId?: string | null;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
+}
+
 export interface SyncStatusRequest {
   userId: string;
   deviceId: string;
@@ -46,6 +53,13 @@ export interface SyncPullRequest {
   clientRevision: number | null;
 }
 
+export interface SyncAckRequest {
+  userId: string;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
+}
+
 export interface StoredSnapshot {
   id: string;
   revision: number;
@@ -60,6 +74,9 @@ export interface DeviceSyncInfo {
   lastSeenAt: string;
   lastClientRevision: number | null;
   lastClientHash: string | null;
+  lastAckRevision: number | null;
+  lastAckHash: string | null;
+  lastAckAt: string | null;
 }
 
 export interface UserSyncRecord {
@@ -109,3 +126,15 @@ export interface SyncPullResponse {
   reason: string;
 }
 
+export interface SyncAckResponse {
+  ok: true;
+  accepted: boolean;
+  userId: string;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
+  serverRevision: number;
+  serverHash: string | null;
+  isLatest: boolean;
+  reason: string;
+}

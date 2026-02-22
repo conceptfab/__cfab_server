@@ -29,7 +29,7 @@ function statusBadge(status: SyncDeliveryStatus): { label: string; className: st
       };
     case "pending":
       return {
-        label: "Czeka na pobranie",
+        label: "Brak potwierdzenia",
         className: "border-amber-500/40 bg-amber-500/10 text-amber-200",
       };
     default:
@@ -50,6 +50,22 @@ function formatDate(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("pl-PL");
+}
+
+function formatUptime(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || days > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+  parts.push(`${secs}s`);
+
+  return parts.join(" ");
 }
 
 async function resolveSearchParams(
@@ -73,16 +89,12 @@ function getFirstQueryValue(
 function LoginView({ authState }: { authState: string | null }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 py-8 text-zinc-100">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/80 p-6 shadow-2xl shadow-black/30">
+      <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-2xl shadow-black/30">
         <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
-          CFAB Sync Server
+          Panel
         </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Status synchronizacji
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-zinc-400">
-          Zaloguj sie mailem i tokenem sync, aby zobaczyc status danych dla swojego konta.
-        </p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Dostep</h1>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">Wprowadz dane.</p>
         <SyncStatusLoginForm authState={authState} />
       </div>
     </main>
@@ -141,9 +153,10 @@ function UserStatusView({
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
           <h2 className="text-sm font-medium text-zinc-200">Jak czytac statusy</h2>
           <p className="mt-2 text-sm leading-6 text-zinc-400">
-            "Czeka na pobranie" oznacza, ze serwer ma nowszy snapshot niz ostatnio
-            zgloszony stan urzadzenia. "Odebrane / aktualne" jest wyliczane na podstawie
-            ostatnio wyslanego `clientRevision`/`clientHash`.
+            Brak potwierdzenia oznacza, ze serwer nie ma jawnego `ack` odbioru
+            najnowszego snapshotu dla danego urzadzenia. Po udanym `pull` klient powinien
+            wyslac `ack`. Po potwierdzeniu przez wszystkie znane urzadzenia docelowe
+            payload jest usuwany z serwera.
           </p>
         </section>
 
@@ -280,6 +293,7 @@ function UserStatusView({
         <footer className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
           <div>Store: {storeFile}</div>
           <div>Data dir: {dataDir}</div>
+          <div>Uptime servera: {formatUptime(process.uptime())}</div>
           <div>Cookie sesji: 7 dni (httpOnly)</div>
         </footer>
       </div>

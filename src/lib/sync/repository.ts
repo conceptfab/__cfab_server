@@ -63,6 +63,9 @@ type LegacyDevice = {
   lastSeenAt?: unknown;
   lastClientRevision?: unknown;
   lastClientHash?: unknown;
+  lastAckRevision?: unknown;
+  lastAckHash?: unknown;
+  lastAckAt?: unknown;
 };
 
 type LegacyUser = {
@@ -100,6 +103,9 @@ function normalizeDevice(device: LegacyDevice | undefined): DeviceSyncInfo | nul
     lastSeenAt,
     lastClientRevision: asNullableNumber(device.lastClientRevision),
     lastClientHash: asNullableString(device.lastClientHash),
+    lastAckRevision: asNullableNumber(device.lastAckRevision),
+    lastAckHash: asNullableString(device.lastAckHash),
+    lastAckAt: asNullableString(device.lastAckAt),
   };
 }
 
@@ -228,7 +234,24 @@ async function writeStore(store: SyncStoreFile): Promise<void> {
   await writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf8");
 }
 
+function deviceHasExplicitAckForSnapshot(
+  device: DeviceSyncInfo,
+  latest: StoredSnapshot,
+): boolean {
+  if (device.lastAckHash && device.lastAckHash === latest.payloadSha256) {
+    return true;
+  }
+  if (
+    typeof device.lastAckRevision === "number" &&
+    device.lastAckRevision >= latest.revision
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function getDeviceDeliveryStatus(
+  deviceId: string,
   device: DeviceSyncInfo,
   latest: StoredSnapshot | null,
 ): SyncDeliveryStatus {
@@ -236,21 +259,29 @@ function getDeviceDeliveryStatus(
     return "unknown";
   }
 
-  if (device.lastClientHash && device.lastClientHash === latest.payloadSha256) {
+  // Device that created the latest snapshot already has this payload locally (push path).
+  if (
+    deviceId === latest.sourceDeviceId &&
+    device.lastClientHash &&
+    device.lastClientHash === latest.payloadSha256
+  ) {
     return "up_to_date";
   }
 
+  if (deviceHasExplicitAckForSnapshot(device, latest)) {
+    return "up_to_date";
+  }
+
+  if (device.lastClientHash && device.lastClientHash === latest.payloadSha256) {
+    return "pending";
+  }
+
   if (typeof device.lastClientRevision === "number") {
-    if (device.lastClientRevision >= latest.revision) {
-      return "up_to_date";
-    }
-    if (device.lastClientRevision < latest.revision) {
-      return "pending";
-    }
+    return "pending";
   }
 
   if (device.lastClientHash) {
-    return device.lastClientHash === latest.payloadSha256 ? "up_to_date" : "pending";
+    return "pending";
   }
 
   return "unknown";
@@ -322,7 +353,7 @@ export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
     const latest = user.latestSnapshot;
     const devices = Object.entries(user.devices)
       .map(([deviceId, device]) => {
-        const status = getDeviceDeliveryStatus(device, latest);
+        const status = getDeviceDeliveryStatus(deviceId, device, latest);
         return {
           deviceId,
           lastSeenAt: device.lastSeenAt,

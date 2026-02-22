@@ -53,44 +53,47 @@ export function SyncStatusLoginForm({
     <>
       {invalid ? (
         <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          Niepoprawny mail lub token.
+          Blad.
         </div>
       ) : null}
       {loggedOut ? (
         <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2 text-sm text-zinc-200">
-          Wylogowano. Sesja cookie zostala usunieta.
+          Sesja zakonczona.
         </div>
       ) : null}
 
-      <form action="/auth/login" method="post" className="mt-6 space-y-4">
+      <form action="/auth/login" method="post" className="mt-4 space-y-3">
         <label className="grid gap-1.5 text-sm">
-          <span className="text-zinc-300">Mail (User ID)</span>
+          <span className="sr-only">ID</span>
           <input
-            type="email"
-            name="userId"
+            type="text"
+            name="i"
             required
-            autoComplete="username"
-            placeholder="michal@conceptfab.com"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="ID"
+            placeholder="ID"
             className="h-10 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-500 focus:border-zinc-500"
           />
         </label>
 
         <label className="grid gap-1.5 text-sm">
-          <span className="text-zinc-300">Token</span>
+          <span className="sr-only">Kod</span>
           <div className="flex items-center gap-2">
             <input
               type={showToken ? "text" : "password"}
-              name="token"
+              name="k"
               required
-              autoComplete="current-password"
-              placeholder="Wklej sam token (bez 'Bearer ' i bez cudzyslowow)"
+              autoComplete="off"
+              aria-label="Kod"
+              placeholder="Kod"
               className="h-10 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-500 focus:border-zinc-500"
             />
             <button
               type="button"
               onClick={() => setShowToken((prev) => !prev)}
-              aria-label={showToken ? "Ukryj token" : "Pokaz token"}
-              title={showToken ? "Ukryj token" : "Pokaz token"}
+              aria-label={showToken ? "Ukryj" : "Pokaz"}
+              title={showToken ? "Ukryj" : "Pokaz"}
               className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-zinc-700 bg-zinc-950 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100"
             >
               {showToken ? <EyeOffIcon /> : <EyeIcon />}
@@ -98,15 +101,11 @@ export function SyncStatusLoginForm({
           </div>
         </label>
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-xs leading-5 text-zinc-400">
-          Po zalogowaniu zapisujemy `httpOnly` cookie na 7 dni (tylko dla tej strony).
-        </div>
-
         <button
           type="submit"
           className="inline-flex h-10 w-full items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/15 px-4 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/20"
         >
-          Zaloguj i pokaz status
+          Dalej
         </button>
       </form>
     </>

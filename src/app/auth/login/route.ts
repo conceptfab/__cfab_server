@@ -6,17 +6,18 @@ import {
   getDashboardAuthCookieOptions,
   validateDashboardCredentials,
 } from "@/lib/auth/dashboard-page-auth";
+import { buildAbsoluteRequestUrl } from "@/lib/http/request";
 
 export const runtime = "nodejs";
 
 function redirectTo(request: Request, path: string): NextResponse {
-  return NextResponse.redirect(new URL(path, request.url));
+  return NextResponse.redirect(buildAbsoluteRequestUrl(request, path), 303);
 }
 
 export async function POST(request: Request) {
   const formData = await request.formData();
-  const userId = String(formData.get("userId") ?? "");
-  const token = String(formData.get("token") ?? "");
+  const userId = String(formData.get("i") ?? formData.get("userId") ?? "");
+  const token = String(formData.get("k") ?? formData.get("token") ?? "");
 
   const validation = validateDashboardCredentials(userId, token);
   if (!validation.ok) {
@@ -31,4 +32,3 @@ export async function POST(request: Request) {
   );
   return response;
 }
-

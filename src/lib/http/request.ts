@@ -51,3 +51,32 @@ export function getClientIp(request: Request): string | null {
   return request.headers.get("x-real-ip");
 }
 
+function getFirstForwardedHeaderValue(request: Request, header: string): string | null {
+  const raw = request.headers.get(header);
+  if (!raw) return null;
+  const first = raw.split(",")[0]?.trim();
+  return first || null;
+}
+
+export function getRequestOrigin(request: Request): string {
+  const requestUrl = new URL(request.url);
+  const forwardedHost = getFirstForwardedHeaderValue(request, "x-forwarded-host");
+  const forwardedProto = getFirstForwardedHeaderValue(request, "x-forwarded-proto");
+
+  if (forwardedHost) {
+    const proto = forwardedProto ?? requestUrl.protocol.replace(":", "");
+    return `${proto}://${forwardedHost}`;
+  }
+
+  const host = request.headers.get("host")?.trim();
+  if (host) {
+    const proto = forwardedProto ?? requestUrl.protocol.replace(":", "");
+    return `${proto}://${host}`;
+  }
+
+  return requestUrl.origin;
+}
+
+export function buildAbsoluteRequestUrl(request: Request, path: string): URL {
+  return new URL(path, getRequestOrigin(request));
+}

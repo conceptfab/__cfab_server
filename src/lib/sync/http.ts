@@ -8,7 +8,7 @@ import { log, logError } from "@/lib/observability/logger";
 import { REQUEST_ID_HEADER, getOrCreateRequestId } from "@/lib/observability/request-id";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 
-type SyncRouteName = "status" | "push" | "pull";
+type SyncRouteName = "status" | "push" | "pull" | "ack";
 
 interface SyncRouteSpec<TBody, TResponse> {
   route: SyncRouteName;
