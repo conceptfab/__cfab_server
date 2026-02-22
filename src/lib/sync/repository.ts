@@ -8,7 +8,8 @@ import type {
   UserSyncRecord,
 } from "@/lib/sync/contracts";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR =
+  process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "sync-store.json");
 
 type LegacySnapshot = {

@@ -41,10 +41,19 @@ Dla requestów sync wymagany jest nagłówek:
 Authorization: Bearer super-secret-token
 ```
 
+Klient desktop/dashboard musi wysyłać token przypisany do `userId` (nagłówek `Bearer`).
+
 `userId` w body jest nadal akceptowany dla kompatybilności MVP, ale:
 
 - przy tokenie musi zgadzać się z użytkownikiem przypisanym do tokena,
 - bez tokena działa tylko fallback deweloperski (`SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK=true`).
+
+## CORS (Tauri / web)
+
+Endpointy `/api/sync/*` obsługują CORS + preflight `OPTIONS`.
+
+- `SYNC_ALLOWED_ORIGINS=*` (lub puste) pozwala na dowolny origin,
+- można też podać listę CSV (np. `http://localhost:1420,tauri://localhost`).
 
 ## Endpointy
 
@@ -58,6 +67,8 @@ API sync zwraca `x-request-id` i używa `Cache-Control: no-store`.
 ## Storage (aktualnie)
 
 Stan sync jest zapisywany w `data/sync-store.json` (plik lokalny) z mutexem procesowym, co poprawia zachowanie przy równoległych requestach w ramach jednej instancji.
+
+Można nadpisać katalog storage przez `SYNC_DATA_DIR` (np. na Railway ustaw `SYNC_DATA_DIR=/data`, jeśli volume jest zamontowany pod `/data`).
 
 To jest etap przejściowy przed migracją na Postgresa/Prisma.
 

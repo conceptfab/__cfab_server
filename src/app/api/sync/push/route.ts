@@ -1,8 +1,12 @@
-import { handleSyncPost } from "@/lib/sync/http";
+import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { pushSnapshot } from "@/lib/sync/service";
 import { validatePushBody } from "@/lib/sync/validation";
 
 export const runtime = "nodejs";
+
+export async function OPTIONS(request: Request) {
+  return handleSyncOptions(request);
+}
 
 export async function POST(request: Request) {
   return handleSyncPost(request, {

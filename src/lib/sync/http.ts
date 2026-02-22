@@ -19,15 +19,49 @@ interface SyncRouteSpec<TBody, TResponse> {
   summarizeResult?: (result: TResponse) => Record<string, unknown>;
 }
 
-function buildHeaders(requestId: string): HeadersInit {
+function resolveCorsOrigin(request: Request): string | null {
+  const origin = request.headers.get("origin")?.trim();
+  if (!origin) return null;
+
+  const env = getEnv();
+  if (env.syncAllowedOrigins.length === 0 || env.syncAllowedOrigins.includes("*")) {
+    return "*";
+  }
+
+  return env.syncAllowedOrigins.includes(origin) ? origin : null;
+}
+
+function buildCorsHeaders(request: Request): HeadersInit {
+  const allowOrigin = resolveCorsOrigin(request);
+  if (!allowOrigin) {
+    return {};
+  }
+
+  const headers: Record<string, string> = {
+    "access-control-allow-origin": allowOrigin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "authorization, content-type, x-request-id",
+    "access-control-expose-headers": REQUEST_ID_HEADER,
+    "access-control-max-age": "600",
+  };
+
+  if (allowOrigin !== "*") {
+    headers.vary = "Origin";
+  }
+
+  return headers;
+}
+
+function buildHeaders(requestId: string, request?: Request): HeadersInit {
   return {
     [REQUEST_ID_HEADER]: requestId,
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...(request ? buildCorsHeaders(request) : {}),
   };
 }
 
-function responseFromError(error: unknown, requestId: string): NextResponse {
+function responseFromError(error: unknown, requestId: string, request: Request): NextResponse {
   const env = getEnv();
   const appError = isAppError(error) ? error : internalServerError();
 
@@ -45,9 +79,17 @@ function responseFromError(error: unknown, requestId: string): NextResponse {
     },
     {
       status: appError.status,
-      headers: buildHeaders(requestId),
+      headers: buildHeaders(requestId, request),
     },
   );
+}
+
+export async function handleSyncOptions(request: Request): Promise<NextResponse> {
+  const requestId = getOrCreateRequestId(request);
+  return new NextResponse(null, {
+    status: 204,
+    headers: buildHeaders(requestId, request),
+  });
 }
 
 export async function handleSyncPost<TBody, TResponse>(
@@ -110,7 +152,7 @@ export async function handleSyncPost<TBody, TResponse>(
     });
 
     return NextResponse.json(result, {
-      headers: buildHeaders(requestId),
+      headers: buildHeaders(requestId, request),
     });
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
@@ -135,7 +177,6 @@ export async function handleSyncPost<TBody, TResponse>(
       },
     );
 
-    return responseFromError(error, requestId);
+    return responseFromError(error, requestId, request);
   }
 }
-
