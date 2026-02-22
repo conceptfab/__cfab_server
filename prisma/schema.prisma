@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  publicUserId String?       @unique @map("public_user_id")
+  email        String?       @unique
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  devices       Device[]
+  syncHead      SyncHead?
+  syncSnapshots SyncSnapshot[]
+  syncEvents    SyncEvent[]
+
+  @@map("users")
+}
+
+model Device {
+  id                 String    @id @default(cuid())
+  userId             String    @map("user_id")
+  deviceId           String    @map("device_id")
+  displayName        String?   @map("display_name")
+  lastSeenAt         DateTime? @map("last_seen_at")
+  lastClientRevision Int?      @map("last_client_revision")
+  lastClientHash     String?   @map("last_client_hash")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceSnapshots SyncSnapshot[]
+
+  @@unique([userId, deviceId], map: "devices_user_id_device_id_key")
+  @@index([userId], map: "devices_user_id_idx")
+  @@map("devices")
+}
+
+model SyncHead {
+  userId               String   @id @map("user_id")
+  latestRevision       Int      @default(0) @map("latest_revision")
+  latestSnapshotId     String?  @map("latest_snapshot_id")
+  latestPayloadSha256  String?  @map("latest_payload_sha256")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  latestSnapshot SyncSnapshot? @relation("LatestSnapshot", fields: [latestSnapshotId], references: [id], onDelete: SetNull)
+
+  @@map("sync_heads")
+}
+
+model SyncSnapshot {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  revision       Int
+  payloadSha256  String   @map("payload_sha256")
+  sourceDeviceId String?  @map("source_device_id")
+  archiveJson    Json?    @map("archive_json")
+  blobUrl        String?  @map("blob_url")
+  sizeBytes      Int      @default(0) @map("size_bytes")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceDevice    Device?    @relation(fields: [sourceDeviceId], references: [id], onDelete: SetNull)
+  latestForHeads  SyncHead[] @relation("LatestSnapshot")
+
+  @@unique([userId, revision], map: "sync_snapshots_user_id_revision_key")
+  @@index([userId, payloadSha256], map: "sync_snapshots_user_id_payload_sha256_idx")
+  @@index([userId, createdAt], map: "sync_snapshots_user_id_created_at_idx")
+  @@map("sync_snapshots")
+}
+
+model SyncEvent {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  deviceId   String?  @map("device_id")
+  endpoint   String
+  outcome    String
+  requestId  String?  @map("request_id")
+  meta       Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt], map: "sync_events_created_at_idx")
+  @@index([userId, createdAt], map: "sync_events_user_id_created_at_idx")
+  @@map("sync_events")
+}
+

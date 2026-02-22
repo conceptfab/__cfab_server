@@ -1,23 +1,34 @@
-import { NextResponse } from "next/server";
-
-import { pullSnapshot, validatePullRequest } from "@/lib/sync-store";
+import { handleSyncPost } from "@/lib/sync/http";
+import { pullSnapshot } from "@/lib/sync/service";
+import { validatePullBody } from "@/lib/sync/validation";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  try {
-    const body = (await request.json()) as unknown;
-    const parsed = validatePullRequest(body);
-    const response = await pullSnapshot(parsed);
-    return NextResponse.json(response);
-  } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : "Unexpected error",
-      },
-      { status: 400 },
-    );
-  }
+  return handleSyncPost(request, {
+    route: "pull",
+    parseBody: validatePullBody,
+    getBodyUserId: (body) => body.userId,
+    getDeviceId: (body) => body.deviceId,
+    execute: ({ userId, body }) =>
+      pullSnapshot({
+        userId,
+        deviceId: body.deviceId,
+        clientRevision: body.clientRevision,
+      }),
+    summarizeResult: (result) => {
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        "reason" in result &&
+        "hasUpdate" in result
+      ) {
+        return {
+          resultReason: result.reason,
+          hasUpdate: result.hasUpdate,
+        };
+      }
+      return {};
+    },
+  });
 }
-

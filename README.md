@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CFAB Sync Server (Next.js API)
 
-## Getting Started
+Serwer sync dla dashboardu/klienta CFAB. Aktualny etap:
 
-First, run the development server:
+- endpointy `POST /api/sync/status|push|pull`,
+- token-based auth (`Authorization: Bearer <token>`),
+- walidacja payloadu + limity rozmiaru,
+- rate limiting (in-memory, best-effort),
+- JSON logs + `x-request-id`,
+- healthcheck `GET /api/health`,
+- file storage (MVP) zaabstrahowany pod przyszłą migrację do DB,
+- scaffold `prisma/schema.prisma` pod Postgres.
+
+## Szybki start (local)
+
+1. Skopiuj `.env.example` do `.env.local` i ustaw token(y).
+2. Uruchom:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. Healthcheck:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+curl http://localhost:3000/api/health
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Auth (token per user)
 
-## Learn More
+`SYNC_API_TOKENS` używa formatu:
 
-To learn more about Next.js, take a look at the following resources:
+```env
+SYNC_API_TOKENS=userA=super-secret-token,userB=another-token
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Dla requestów sync wymagany jest nagłówek:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```http
+Authorization: Bearer super-secret-token
+```
 
-## Deploy on Vercel
+`userId` w body jest nadal akceptowany dla kompatybilności MVP, ale:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- przy tokenie musi zgadzać się z użytkownikiem przypisanym do tokena,
+- bez tokena działa tylko fallback deweloperski (`SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK=true`).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Endpointy
+
+- `POST /api/sync/status`
+- `POST /api/sync/push`
+- `POST /api/sync/pull`
+- `GET /api/health`
+
+API sync zwraca `x-request-id` i używa `Cache-Control: no-store`.
+
+## Storage (aktualnie)
+
+Stan sync jest zapisywany w `data/sync-store.json` (plik lokalny) z mutexem procesowym, co poprawia zachowanie przy równoległych requestach w ramach jednej instancji.
+
+To jest etap przejściowy przed migracją na Postgresa/Prisma.
+
+## Prisma / Postgres (scaffold)
+
+Dodany został `prisma/schema.prisma` zgodny z `server_plan.md` (tabele `users`, `devices`, `sync_heads`, `sync_snapshots`, `sync_events`), ale runtime nadal korzysta z file storage.
+
+Kolejny krok:
+
+1. dodać `prisma` + `@prisma/client`,
+2. wygenerować migrację,
+3. podmienić `FileSyncRepository` na implementację DB.
