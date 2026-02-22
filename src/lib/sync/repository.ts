@@ -12,6 +12,43 @@ const DATA_DIR =
   process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "sync-store.json");
 
+export type SyncDeliveryStatus = "up_to_date" | "pending" | "unknown";
+
+export interface SyncDashboardDeviceSummary {
+  deviceId: string;
+  lastSeenAt: string;
+  lastClientRevision: number | null;
+  lastClientHash: string | null;
+  status: SyncDeliveryStatus;
+}
+
+export interface SyncDashboardUserSummary {
+  userId: string;
+  snapshotCount: number;
+  deviceCount: number;
+  latestRevision: number | null;
+  latestHash: string | null;
+  latestReceivedAt: string | null;
+  latestSourceDeviceId: string | null;
+  pendingDevices: number;
+  upToDateDevices: number;
+  unknownDevices: number;
+  devices: SyncDashboardDeviceSummary[];
+}
+
+export interface SyncDashboardSummary {
+  dataDir: string;
+  storeFile: string;
+  generatedAt: string;
+  userCount: number;
+  snapshotCount: number;
+  deviceCount: number;
+  pendingDevices: number;
+  upToDateDevices: number;
+  unknownDevices: number;
+  users: SyncDashboardUserSummary[];
+}
+
 type LegacySnapshot = {
   id?: unknown;
   revision?: unknown;
@@ -191,6 +228,34 @@ async function writeStore(store: SyncStoreFile): Promise<void> {
   await writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf8");
 }
 
+function getDeviceDeliveryStatus(
+  device: DeviceSyncInfo,
+  latest: StoredSnapshot | null,
+): SyncDeliveryStatus {
+  if (!latest) {
+    return "unknown";
+  }
+
+  if (device.lastClientHash && device.lastClientHash === latest.payloadSha256) {
+    return "up_to_date";
+  }
+
+  if (typeof device.lastClientRevision === "number") {
+    if (device.lastClientRevision >= latest.revision) {
+      return "up_to_date";
+    }
+    if (device.lastClientRevision < latest.revision) {
+      return "pending";
+    }
+  }
+
+  if (device.lastClientHash) {
+    return device.lastClientHash === latest.payloadSha256 ? "up_to_date" : "pending";
+  }
+
+  return "unknown";
+}
+
 let mutex: Promise<void> = Promise.resolve();
 
 async function withMutex<T>(work: () => Promise<T>): Promise<T> {
@@ -241,4 +306,76 @@ let defaultRepository: SyncRepository | null = null;
 export function getSyncRepository(): SyncRepository {
   defaultRepository ??= new FileSyncRepository();
   return defaultRepository;
+}
+
+export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
+  const store = await readStore();
+  const users: SyncDashboardUserSummary[] = [];
+
+  let snapshotCount = 0;
+  let deviceCount = 0;
+  let pendingDevices = 0;
+  let upToDateDevices = 0;
+  let unknownDevices = 0;
+
+  for (const [userId, user] of Object.entries(store.users)) {
+    const latest = user.latestSnapshot;
+    const devices = Object.entries(user.devices)
+      .map(([deviceId, device]) => {
+        const status = getDeviceDeliveryStatus(device, latest);
+        return {
+          deviceId,
+          lastSeenAt: device.lastSeenAt,
+          lastClientRevision: device.lastClientRevision,
+          lastClientHash: device.lastClientHash,
+          status,
+        } satisfies SyncDashboardDeviceSummary;
+      })
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+
+    const userPendingDevices = devices.filter((device) => device.status === "pending").length;
+    const userUpToDateDevices = devices.filter(
+      (device) => device.status === "up_to_date",
+    ).length;
+    const userUnknownDevices = devices.filter((device) => device.status === "unknown").length;
+
+    snapshotCount += user.snapshots.length;
+    deviceCount += devices.length;
+    pendingDevices += userPendingDevices;
+    upToDateDevices += userUpToDateDevices;
+    unknownDevices += userUnknownDevices;
+
+    users.push({
+      userId,
+      snapshotCount: user.snapshots.length,
+      deviceCount: devices.length,
+      latestRevision: latest?.revision ?? null,
+      latestHash: latest?.payloadSha256 ?? null,
+      latestReceivedAt: latest?.receivedAt ?? null,
+      latestSourceDeviceId: latest?.sourceDeviceId ?? null,
+      pendingDevices: userPendingDevices,
+      upToDateDevices: userUpToDateDevices,
+      unknownDevices: userUnknownDevices,
+      devices,
+    });
+  }
+
+  users.sort((a, b) => {
+    const left = a.latestReceivedAt ?? "";
+    const right = b.latestReceivedAt ?? "";
+    return right.localeCompare(left);
+  });
+
+  return {
+    dataDir: DATA_DIR,
+    storeFile: STORE_FILE,
+    generatedAt: new Date().toISOString(),
+    userCount: users.length,
+    snapshotCount,
+    deviceCount,
+    pendingDevices,
+    upToDateDevices,
+    unknownDevices,
+    users,
+  };
 }
