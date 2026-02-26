@@ -4,7 +4,7 @@
 
 Ten plan opisuje dokladnie, co trzeba zrobic **po stronie serwera** (repo serwera po przeniesieniu), aby przejsc z obecnego MVP (`status/push/pull` + storage plikowy) do wersji gotowej do stabilnego uzycia na Railway.
 
-Dokument jest celowo niezalezny od starej sciezki `__cfab_server`.
+Dokument jest celowo niezalezny od starej sciezki `__timeflow_server`.
 
 ## Zakres
 
@@ -389,4 +389,5 @@ Jesli chcesz wejsc w implementacje od razu, najrozsadniejsza kolejnosc jest taka
   - skeleton Prisma schema,
   - auth middleware,
   - plan migracji z MVP file store do DB.
+
 

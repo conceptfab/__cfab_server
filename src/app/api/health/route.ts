@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     {
       ok: true,
       status: "healthy",
-      service: "cfab-sync-server",
+      service: "timeflow-sync-server",
       time: now,
       authMode: env.syncAuthMode,
       encryptionMode: env.encryptionMode,
@@ -32,4 +32,5 @@ export async function GET(request: Request) {
     },
   );
 }
+
 

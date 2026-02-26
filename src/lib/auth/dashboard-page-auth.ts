@@ -2,7 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 
 import { getEnv } from "@/lib/config/env";
 
-export const SYNC_DASHBOARD_AUTH_COOKIE = "cfab_sync_dashboard_auth";
+export const SYNC_DASHBOARD_AUTH_COOKIE = "timeflow_sync_dashboard_auth";
+export const LEGACY_SYNC_DASHBOARD_AUTH_COOKIE = "cfab_sync_dashboard_auth";
 const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
 
 interface DashboardAuthCookiePayload {
@@ -127,3 +128,4 @@ export function getDashboardUserIdFromCookie(rawCookieValue: string | undefined)
   const validation = validateDashboardCredentials(payload.userId, payload.token);
   return validation.ok ? validation.userId : null;
 }
+

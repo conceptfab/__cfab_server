@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
   SYNC_DASHBOARD_AUTH_COOKIE,
   clearDashboardAuthCookieValue,
 } from "@/lib/auth/dashboard-page-auth";
@@ -15,5 +16,6 @@ export async function POST(request: Request) {
   );
   const cleared = clearDashboardAuthCookieValue();
   response.cookies.set(SYNC_DASHBOARD_AUTH_COOKIE, cleared.value, cleared.options);
+  response.cookies.set(LEGACY_SYNC_DASHBOARD_AUTH_COOKIE, cleared.value, cleared.options);
   return response;
 }

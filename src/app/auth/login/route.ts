@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
   SYNC_DASHBOARD_AUTH_COOKIE,
   buildDashboardAuthCookieValue,
   getDashboardAuthCookieOptions,
@@ -29,6 +30,11 @@ export async function POST(request: Request) {
     SYNC_DASHBOARD_AUTH_COOKIE,
     buildDashboardAuthCookieValue(validation.userId, token),
     getDashboardAuthCookieOptions(),
+  );
+  response.cookies.set(
+    LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
+    "",
+    { ...getDashboardAuthCookieOptions(), maxAge: 0 },
   );
   return response;
 }

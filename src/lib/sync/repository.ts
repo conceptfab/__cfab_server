@@ -19,6 +19,9 @@ export interface SyncDashboardDeviceSummary {
   lastSeenAt: string;
   lastClientRevision: number | null;
   lastClientHash: string | null;
+  lastAckRevision: number | null;
+  lastAckHash: string | null;
+  lastAckAt: string | null;
   status: SyncDeliveryStatus;
 }
 
@@ -30,6 +33,7 @@ export interface SyncDashboardUserSummary {
   latestHash: string | null;
   latestReceivedAt: string | null;
   latestSourceDeviceId: string | null;
+  latestArchiveAvailable: boolean;
   pendingDevices: number;
   upToDateDevices: number;
   unknownDevices: number;
@@ -359,6 +363,9 @@ export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
           lastSeenAt: device.lastSeenAt,
           lastClientRevision: device.lastClientRevision,
           lastClientHash: device.lastClientHash,
+          lastAckRevision: device.lastAckRevision,
+          lastAckHash: device.lastAckHash,
+          lastAckAt: device.lastAckAt,
           status,
         } satisfies SyncDashboardDeviceSummary;
       })
@@ -384,6 +391,7 @@ export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
       latestHash: latest?.payloadSha256 ?? null,
       latestReceivedAt: latest?.receivedAt ?? null,
       latestSourceDeviceId: latest?.sourceDeviceId ?? null,
+      latestArchiveAvailable: latest?.archive !== null && latest?.archive !== undefined,
       pendingDevices: userPendingDevices,
       upToDateDevices: userUpToDateDevices,
       unknownDevices: userUnknownDevices,

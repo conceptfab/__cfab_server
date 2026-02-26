@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
+  LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
   SYNC_DASHBOARD_AUTH_COOKIE,
   getDashboardUserIdFromCookie,
 } from "@/lib/auth/dashboard-page-auth";
@@ -121,7 +122,7 @@ function UserStatusView({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
-                CFAB Sync Server
+                TimeFlow Sync Server
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">
                 Status synchronizacji
@@ -155,8 +156,9 @@ function UserStatusView({
           <p className="mt-2 text-sm leading-6 text-zinc-400">
             Brak potwierdzenia oznacza, ze serwer nie ma jawnego `ack` odbioru
             najnowszego snapshotu dla danego urzadzenia. Po udanym `pull` klient powinien
-            wyslac `ack`. Po potwierdzeniu przez wszystkie znane urzadzenia docelowe
-            payload jest usuwany z serwera.
+            wyslac `ack`. Status `Odebrane / aktualne` oznacza jawny `ack` (albo urzadzenie,
+            ktore utworzylo snapshot przez `push`). Po potwierdzeniu przez wszystkie znane
+            urzadzenia docelowe payload jest usuwany z serwera.
           </p>
         </section>
 
@@ -235,6 +237,16 @@ function UserStatusView({
                     {user.latestSourceDeviceId ?? "brak"}
                   </span>
                 </div>
+                <div>
+                  Payload na serwerze:{" "}
+                  <span
+                    className={
+                      user.latestArchiveAvailable ? "text-emerald-300" : "text-amber-200"
+                    }
+                  >
+                    {user.latestArchiveAvailable ? "jest" : "usuniety"}
+                  </span>
+                </div>
               </div>
 
               <div className="mt-4 overflow-x-auto">
@@ -246,12 +258,14 @@ function UserStatusView({
                       <th className="px-3 py-2">Last Seen</th>
                       <th className="px-3 py-2">Client Rev</th>
                       <th className="px-3 py-2">Client Hash</th>
+                      <th className="px-3 py-2">ACK Rev</th>
+                      <th className="px-3 py-2">ACK At</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800">
                     {user.devices.length === 0 ? (
                       <tr>
-                        <td className="px-3 py-4 text-zinc-500" colSpan={5}>
+                        <td className="px-3 py-4 text-zinc-500" colSpan={7}>
                           Brak urzadzen dla tego konta.
                         </td>
                       </tr>
@@ -279,6 +293,12 @@ function UserStatusView({
                             <td className="px-3 py-3 font-mono text-xs text-zinc-300">
                               {shortHash(device.lastClientHash)}
                             </td>
+                            <td className="px-3 py-3 font-mono text-zinc-200">
+                              {device.lastAckRevision ?? "n/a"}
+                            </td>
+                            <td className="px-3 py-3 text-zinc-300">
+                              {formatDate(device.lastAckAt)}
+                            </td>
                           </tr>
                         );
                       })
@@ -305,7 +325,8 @@ export default async function Home({ searchParams }: HomePageProps) {
   try {
     const cookieStore = await cookies();
     const loggedUserId = getDashboardUserIdFromCookie(
-      cookieStore.get(SYNC_DASHBOARD_AUTH_COOKIE)?.value,
+      cookieStore.get(SYNC_DASHBOARD_AUTH_COOKIE)?.value ??
+        cookieStore.get(LEGACY_SYNC_DASHBOARD_AUTH_COOKIE)?.value,
     );
 
     const resolvedSearchParams = await resolveSearchParams(searchParams);
@@ -332,7 +353,7 @@ export default async function Home({ searchParams }: HomePageProps) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6 text-zinc-100">
         <div className="w-full max-w-2xl rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6">
-          <p className="text-xs uppercase tracking-[0.2em] text-rose-300">CFAB Sync Server</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-rose-300">TimeFlow Sync Server</p>
           <h1 className="mt-2 text-xl font-semibold">Blad odczytu statusu</h1>
           <p className="mt-3 text-sm text-rose-100/90">{message}</p>
         </div>
@@ -340,3 +361,4 @@ export default async function Home({ searchParams }: HomePageProps) {
     );
   }
 }
+

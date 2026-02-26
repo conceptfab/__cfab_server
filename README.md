@@ -1,6 +1,6 @@
-# CFAB Sync Server (Next.js API)
+# TimeFlow Sync Server (Next.js API)
 
-Serwer sync dla dashboardu/klienta CFAB. Aktualny etap:
+Serwer sync dla dashboardu/klienta TimeFlow. Aktualny etap:
 
 - endpointy `POST /api/sync/status|push|pull`,
 - token-based auth (`Authorization: Bearer <token>`),
@@ -81,3 +81,4 @@ Kolejny krok:
 1. dodać `prisma` + `@prisma/client`,
 2. wygenerować migrację,
 3. podmienić `FileSyncRepository` na implementację DB.
+
