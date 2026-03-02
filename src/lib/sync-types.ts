@@ -85,3 +85,19 @@ export interface SyncPullResponse {
   reason: string;
 }
 
+export interface SyncAckRequest {
+  userId: string;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
+}
+
+export interface SyncAckResponse {
+  ok: true;
+  accepted: boolean;
+  isLatest: boolean;
+  serverRevision: number;
+  serverHash: string | null;
+  reason: string;
+}
+

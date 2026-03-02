@@ -4,6 +4,8 @@ import path from "node:path";
 
 import type {
   JsonValue,
+  SyncAckRequest,
+  SyncAckResponse,
   SyncPullRequest,
   SyncPullResponse,
   SyncPushRequest,
@@ -79,7 +81,7 @@ async function readStore(): Promise<SyncStoreFile> {
     if (!isObject(parsed) || !isObject(parsed.users)) {
       return emptyStore();
     }
-    return parsed as SyncStoreFile;
+    return parsed as unknown as SyncStoreFile;
   } catch (error: unknown) {
     if (
       typeof error === "object" &&
@@ -352,5 +354,90 @@ export async function pullSnapshot(req: SyncPullRequest): Promise<SyncPullRespon
     receivedAt: latest.receivedAt,
     archive: latest.archive,
     reason: "server_revision_newer",
+  };
+}
+
+export function validateAckRequest(body: unknown): SyncAckRequest {
+  if (!isObject(body)) {
+    throw new Error("Invalid request body");
+  }
+
+  const userId = normalizeString(body.userId);
+  const deviceId = normalizeString(body.deviceId);
+  if (!userId || !deviceId) {
+    throw new Error("userId and deviceId are required");
+  }
+
+  if (
+    typeof body.revision !== "number" ||
+    !Number.isFinite(body.revision) ||
+    body.revision < 0
+  ) {
+    throw new Error("revision must be a non-negative finite number");
+  }
+
+  if (!isNonEmptyString(body.payloadSha256)) {
+    throw new Error("payloadSha256 is required");
+  }
+
+  return {
+    userId,
+    deviceId,
+    revision: body.revision,
+    payloadSha256: body.payloadSha256,
+  };
+}
+
+export async function processAck(req: SyncAckRequest): Promise<SyncAckResponse> {
+  const store = await readStore();
+  const user = getOrCreateUser(store, req.userId);
+  updateDeviceHeartbeat(user, req.deviceId, req.revision, req.payloadSha256);
+
+  const latest = user.latestSnapshot;
+
+  if (!latest) {
+    await writeStore(store);
+    return {
+      ok: true,
+      accepted: false,
+      isLatest: false,
+      serverRevision: 0,
+      serverHash: null,
+      reason: "unknown_revision",
+    };
+  }
+
+  if (latest.revision !== req.revision) {
+    await writeStore(store);
+    return {
+      ok: true,
+      accepted: false,
+      isLatest: false,
+      serverRevision: latest.revision,
+      serverHash: latest.payloadSha256,
+      reason: "unknown_revision",
+    };
+  }
+
+  if (latest.payloadSha256 !== req.payloadSha256) {
+    await writeStore(store);
+    return {
+      ok: true,
+      accepted: false,
+      isLatest: true,
+      serverRevision: latest.revision,
+      serverHash: latest.payloadSha256,
+      reason: "hash_mismatch_for_revision",
+    };
+  }
+
+  await writeStore(store);
+  return {
+    ok: true,
+    accepted: true,
+    isLatest: true,
+    serverRevision: latest.revision,
+    serverHash: latest.payloadSha256,
+    reason: "ack_accepted",
   };
 }
