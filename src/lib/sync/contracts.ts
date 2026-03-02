@@ -6,47 +6,88 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export interface SyncStatusBody {
+  userId?: string | null;
+  deviceId: string;
+  clientRevision: number | null;
+  clientHash: string | null;
+}
+
+export interface SyncPushBody {
+  userId?: string | null;
+  deviceId: string;
+  knownServerRevision: number | null;
+  archive: JsonValue;
+}
+
+export interface SyncPullBody {
+  userId?: string | null;
+  deviceId: string;
+  clientRevision: number | null;
+}
+
+export interface SyncAckBody {
+  userId?: string | null;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
+}
+
 export interface SyncStatusRequest {
   userId: string;
   deviceId: string;
-  clientRevision?: number | null;
-  clientHash?: string | null;
+  clientRevision: number | null;
+  clientHash: string | null;
 }
 
 export interface SyncPushRequest {
   userId: string;
   deviceId: string;
-  knownServerRevision?: number | null;
+  knownServerRevision: number | null;
   archive: JsonValue;
 }
 
 export interface SyncPullRequest {
   userId: string;
   deviceId: string;
-  clientRevision?: number | null;
+  clientRevision: number | null;
+}
+
+export interface SyncAckRequest {
+  userId: string;
+  deviceId: string;
+  revision: number;
+  payloadSha256: string;
 }
 
 export interface StoredSnapshot {
+  id: string;
   revision: number;
   payloadSha256: string;
   receivedAt: string;
   sourceDeviceId: string;
+  sizeBytes: number;
   archive: JsonValue;
 }
 
 export interface DeviceSyncInfo {
   lastSeenAt: string;
-  lastClientRevision?: number | null;
-  lastClientHash?: string | null;
+  lastClientRevision: number | null;
+  lastClientHash: string | null;
+  lastAckRevision: number | null;
+  lastAckHash: string | null;
+  lastAckAt: string | null;
 }
 
-export interface UserSyncState {
-  latestSnapshot?: StoredSnapshot;
+export interface UserSyncRecord {
+  latestSnapshot: StoredSnapshot | null;
+  snapshots: StoredSnapshot[];
   devices: Record<string, DeviceSyncInfo>;
 }
 
 export interface SyncStoreFile {
-  users: Record<string, UserSyncState>;
+  version: 2;
+  users: Record<string, UserSyncRecord>;
 }
 
 export interface SyncStatusResponse {
@@ -85,19 +126,15 @@ export interface SyncPullResponse {
   reason: string;
 }
 
-export interface SyncAckRequest {
+export interface SyncAckResponse {
+  ok: true;
+  accepted: boolean;
   userId: string;
   deviceId: string;
   revision: number;
   payloadSha256: string;
-}
-
-export interface SyncAckResponse {
-  ok: true;
-  accepted: boolean;
-  isLatest: boolean;
   serverRevision: number;
   serverHash: string | null;
+  isLatest: boolean;
   reason: string;
 }
-
