@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+import { ResetSyncButton } from "@/components/reset-sync-button";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
@@ -108,13 +109,17 @@ function UserStatusView({
   generatedAt,
   storeFile,
   dataDir,
+  resetState,
 }: {
   userId: string;
   user: SyncDashboardUserSummary | null;
   generatedAt: string;
   storeFile: string;
   dataDir: string;
+  resetState: string | null;
 }) {
+  const hasResettableData = user !== null && (user.snapshotCount > 0 || user.deviceCount > 0);
+
   return (
     <main className="min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -150,6 +155,18 @@ function UserStatusView({
             Ostatnia aktualizacja widoku: {formatDate(generatedAt)}
           </p>
         </header>
+
+        {resetState === "done" ? (
+          <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+            Historia sync dla konta zostala wyczyszczona. Kolejny `push`/`pull` zacznie od zera.
+          </section>
+        ) : null}
+
+        {resetState === "error" ? (
+          <section className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
+            Nie udalo sie wyczyscic historii sync. Sprobuj ponownie.
+          </section>
+        ) : null}
 
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
           <h2 className="text-sm font-medium text-zinc-200">Jak czytac statusy</h2>
@@ -310,6 +327,26 @@ function UserStatusView({
           </>
         )}
 
+        <section className="rounded-2xl border border-rose-500/30 bg-zinc-900/70 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <h2 className="text-sm font-medium text-rose-200">Reset historii sync</h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                Ta operacja usuwa wszystkie snapshoty, revision, `ack` oraz historie urzadzen
+                zapisane na serwerze dla konta{" "}
+                <span className="font-medium text-zinc-200">{userId}</span>.
+                Nastepna synchronizacja zacznie budowac stan od nowa.
+              </p>
+              {!hasResettableData ? (
+                <p className="mt-3 text-sm text-zinc-500">
+                  Brak zapisanych danych sync do usuniecia.
+                </p>
+              ) : null}
+            </div>
+            <ResetSyncButton disabled={!hasResettableData} />
+          </div>
+        </section>
+
         <footer className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
           <div>Store: {storeFile}</div>
           <div>Data dir: {dataDir}</div>
@@ -331,6 +368,7 @@ export default async function Home({ searchParams }: HomePageProps) {
 
     const resolvedSearchParams = await resolveSearchParams(searchParams);
     const authState = getFirstQueryValue(resolvedSearchParams.auth);
+    const resetState = getFirstQueryValue(resolvedSearchParams.reset);
 
     if (!loggedUserId) {
       return <LoginView authState={authState} />;
@@ -346,6 +384,7 @@ export default async function Home({ searchParams }: HomePageProps) {
         generatedAt={summary.generatedAt}
         storeFile={summary.storeFile}
         dataDir={summary.dataDir}
+        resetState={resetState}
       />
     );
   } catch (error) {

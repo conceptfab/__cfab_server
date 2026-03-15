@@ -314,6 +314,7 @@ export interface SyncRepository {
     userId: string,
     mutator: (user: UserSyncRecord) => Promise<T> | T,
   ): Promise<T>;
+  resetUserState(userId: string): Promise<void>;
 }
 
 export class FileSyncRepository implements SyncRepository {
@@ -332,6 +333,14 @@ export class FileSyncRepository implements SyncRepository {
 
       await writeStore(store);
       return result;
+    });
+  }
+
+  async resetUserState(userId: string): Promise<void> {
+    await withMutex(async () => {
+      const store = await readStore();
+      delete store.users[userId];
+      await writeStore(store);
     });
   }
 }
