@@ -61,6 +61,7 @@ model SyncSnapshot {
   payloadSha256  String   @map("payload_sha256")
   sourceDeviceId String?  @map("source_device_id")
   archiveJson    Json?    @map("archive_json")
+  tableHashesJson Json?   @map("table_hashes_json")
   blobUrl        String?  @map("blob_url")
   sizeBytes      Int      @default(0) @map("size_bytes")
   createdAt      DateTime @default(now()) @map("created_at")

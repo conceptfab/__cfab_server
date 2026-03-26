@@ -6,11 +6,25 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export interface SyncStatusBody {
-  userId?: string | null;
-  deviceId: string;
-  clientRevision: number | null;
-  clientHash: string | null;
+export interface TableHashes {
+  projects: string;
+  applications: string;
+  sessions: string;
+  manual_sessions: string;
+}
+
+export interface DeltaData {
+  projects: any[];
+  applications: any[];
+  sessions: any[];
+  manual_sessions: any[];
+  tombstones: {
+    table_name: string;
+    record_id: string;
+    record_uuid: string;
+    deleted_at: string;
+    sync_key: string;
+  }[];
 }
 
 export interface SyncPushBody {
@@ -18,6 +32,22 @@ export interface SyncPushBody {
   deviceId: string;
   knownServerRevision: number | null;
   archive: JsonValue;
+}
+
+export interface SyncDeltaPushBody {
+  userId?: string | null;
+  deviceId: string;
+  tableHashes: TableHashes;
+  baseRevision: number;
+  delta: DeltaData;
+}
+
+export interface SyncStatusBody {
+  userId?: string | null;
+  deviceId: string;
+  clientRevision: number | null;
+  clientHash: string | null;
+  tableHashes?: TableHashes;
 }
 
 export interface SyncPullBody {
@@ -38,6 +68,7 @@ export interface SyncStatusRequest {
   deviceId: string;
   clientRevision: number | null;
   clientHash: string | null;
+  tableHashes?: TableHashes;
 }
 
 export interface SyncPushRequest {
@@ -45,6 +76,14 @@ export interface SyncPushRequest {
   deviceId: string;
   knownServerRevision: number | null;
   archive: JsonValue;
+}
+
+export interface SyncDeltaPushRequest {
+  userId: string;
+  deviceId: string;
+  tableHashes: TableHashes;
+  baseRevision: number;
+  delta: DeltaData;
 }
 
 export interface SyncPullRequest {
@@ -68,6 +107,7 @@ export interface StoredSnapshot {
   sourceDeviceId: string;
   sizeBytes: number;
   archive: JsonValue;
+  tableHashes?: TableHashes | null;
 }
 
 export interface DeviceSyncInfo {
@@ -101,6 +141,15 @@ export interface SyncStatusResponse {
   hasServerData: boolean;
   shouldPush: boolean;
   shouldPull: boolean;
+  reason: string;
+  dirtyTables?: string[];
+}
+
+export interface SyncDeltaPushResponse {
+  ok: true;
+  accepted: boolean;
+  revision: number;
+  serverTableHashes: TableHashes;
   reason: string;
 }
 

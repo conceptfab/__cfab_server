@@ -10,6 +10,21 @@ import { checkRateLimit } from "@/lib/security/rate-limit";
 
 type SyncRouteName = "status" | "push" | "pull" | "ack";
 
+export async function validateTokenSyncAuth(request: Request): Promise<string | null> {
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return null;
+    }
+    const token = authHeader.substring(7);
+    try {
+        // reuse standard auth strategy without body requirements
+        const auth = authenticateSyncRequest(request, null);
+        return auth.userId;
+    } catch {
+       return null;
+    }
+}
+
 interface SyncRouteSpec<TBody, TResponse> {
   route: SyncRouteName;
   parseBody: (body: unknown) => TBody;

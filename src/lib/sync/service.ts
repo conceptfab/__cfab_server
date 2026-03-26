@@ -10,6 +10,9 @@ import type {
   SyncPullResponse,
   SyncPushRequest,
   SyncPushResponse,
+  SyncDeltaPushRequest,
+  SyncDeltaPushResponse,
+  DeltaData,
   SyncStatusRequest,
   SyncStatusResponse,
   UserSyncRecord,
@@ -139,6 +142,28 @@ export async function getSyncStatus(
       reason = "same_revision_hash_not_provided";
     }
 
+    let dirtyTables: string[] | undefined;
+    if (req.tableHashes && latest.tableHashes) {
+      dirtyTables = [];
+      if (req.tableHashes.projects !== latest.tableHashes.projects) dirtyTables.push("projects");
+      if (req.tableHashes.applications !== latest.tableHashes.applications) dirtyTables.push("applications");
+      if (req.tableHashes.sessions !== latest.tableHashes.sessions) dirtyTables.push("sessions");
+      if (req.tableHashes.manual_sessions !== latest.tableHashes.manual_sessions) dirtyTables.push("manual_sessions");
+      
+      if (dirtyTables.length > 0 && !shouldPush) {
+        shouldPush = true;
+        reason = "table_hashes_mismatch_delta_required";
+      } else if (dirtyTables.length === 0 && !shouldPush && !shouldPull) {
+        reason = "table_hashes_match_in_sync";
+      }
+    } else if (req.tableHashes && !latest.tableHashes) {
+       dirtyTables = ["projects", "applications", "sessions", "manual_sessions"];
+       if (!shouldPush) {
+           shouldPush = true;
+           reason = "missing_server_table_hashes_delta_required";
+       }
+    }
+
     return {
       ok: true,
       userId: req.userId,
@@ -151,6 +176,7 @@ export async function getSyncStatus(
       shouldPush,
       shouldPull,
       reason,
+      dirtyTables,
     };
   });
 }
@@ -214,6 +240,100 @@ export async function pushSnapshot(
       payloadSha256,
       receivedAt,
       reason: "snapshot_saved",
+    };
+  });
+}
+
+export async function pushDelta(
+  req: SyncDeltaPushRequest,
+  repository: SyncRepository = getSyncRepository(),
+): Promise<SyncDeltaPushResponse> {
+  const env = getEnv();
+
+  return repository.withUserState(req.userId, (user) => {
+    const current = user.latestSnapshot;
+    
+    // Fallback: jeśli serwer nie ma danych lub wersja bazy się nie zgadza
+    if (!current || !current.archive || typeof current.archive !== 'object') {
+       throw new Error("Cannot apply delta without a valid full base snapshot on server");
+    }
+    
+    if (current.revision !== req.baseRevision) {
+        throw new Error(`Revision mismatch: Server at ${current.revision}, delta based on ${req.baseRevision}`);
+    }
+
+    const archive = JSON.parse(JSON.stringify(current.archive)) as any;
+    
+    // upsert helper
+    const applyUpserts = (tableName: keyof DeltaData, pk: string = 'id') => {
+       const rows = req.delta[tableName as keyof typeof req.delta];
+       if (!Array.isArray(rows) || rows.length === 0) return;
+       
+       if (!archive[tableName]) archive[tableName] = [];
+       const table = archive[tableName] as any[];
+       
+       for (const inc of rows as any[]) {
+           const existingIdx = table.findIndex(r => r[pk] === inc[pk]);
+           if (existingIdx >= 0) {
+               table[existingIdx] = inc;
+           } else {
+               table.push(inc);
+           }
+       }
+    };
+
+    applyUpserts('projects');
+    applyUpserts('applications');
+    applyUpserts('sessions');
+    applyUpserts('manual_sessions');
+
+    // apply tombstones
+    if (Array.isArray(req.delta.tombstones)) {
+        for (const ts of req.delta.tombstones) {
+            const table = archive[ts.table_name];
+            if (Array.isArray(table)) {
+                archive[ts.table_name] = table.filter(r => r.id !== ts.record_id);
+            }
+        }
+    }
+
+    const payloadSha256 = sha256Json(archive);
+    const archiveSizeBytes = jsonByteSize(archive);
+
+    updateDeviceHeartbeat(
+      user,
+      req.deviceId,
+      current.revision,
+      payloadSha256,
+    );
+
+    const receivedAt = nowIso();
+    const nextRevision = current.revision + 1;
+
+    user.snapshots.push({
+      id: randomUUID(),
+      revision: nextRevision,
+      payloadSha256,
+      receivedAt,
+      sourceDeviceId: req.deviceId,
+      sizeBytes: archiveSizeBytes,
+      archive: archive,
+      tableHashes: req.tableHashes,
+    });
+
+    const retention = env.syncSnapshotRetentionCount;
+    if (retention > 0 && user.snapshots.length > retention) {
+      user.snapshots = user.snapshots.slice(-retention);
+    }
+    user.latestSnapshot = user.snapshots[user.snapshots.length - 1] ?? null;
+    pruneDeliveredArchives(user);
+
+    return {
+      ok: true,
+      accepted: true,
+      revision: nextRevision,
+      serverTableHashes: req.tableHashes,
+      reason: "delta_applied",
     };
   });
 }
