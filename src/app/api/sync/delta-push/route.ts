@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { pushDelta } from "@/lib/sync/service";
 import type { SyncDeltaPushRequest } from "@/lib/sync/contracts";
-import { validateTokenSyncAuth, handleSyncOptions } from "@/lib/sync/http";
+import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 
 export const runtime = "nodejs";
 
@@ -19,6 +19,7 @@ const TableHashesSchema = z.object({
 });
 
 const DeltaPushSchema = z.object({
+  userId: z.string(),
   deviceId: z.string(),
   baseRevision: z.number(),
   tableHashes: TableHashesSchema,
@@ -38,40 +39,18 @@ const DeltaPushSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const userId = await validateTokenSyncAuth(request);
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const bodyText = await request.text();
-    const bodyJson = JSON.parse(bodyText);
-    const parsed = DeltaPushSchema.safeParse(bodyJson);
-
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Invalid payload format", details: parsed.error.format() },
-        { status: 400 },
-      );
-    }
-
-    const { deviceId, baseRevision, tableHashes, delta } = parsed.data;
-
-    const reqData: SyncDeltaPushRequest = {
-      userId,
-      deviceId,
-      baseRevision,
-      tableHashes,
-      delta,
-    };
-
-    const resData = await pushDelta(reqData);
-    return NextResponse.json(resData);
-  } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes("Revision mismatch")) {
-         return NextResponse.json({ error: err.message }, { status: 409 });
-    }
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
+  return handleSyncPost(request, {
+    route: "push",
+    parseBody: (body) => DeltaPushSchema.parse(body),
+    getBodyUserId: (body) => body.userId,
+    getDeviceId: (body) => body.deviceId,
+    execute: ({ userId, body }) =>
+      pushDelta({
+        userId,
+        deviceId: body.deviceId,
+        baseRevision: body.baseRevision,
+        tableHashes: body.tableHashes,
+        delta: body.delta,
+      }),
+  });
 }
