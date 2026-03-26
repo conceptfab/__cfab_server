@@ -3,7 +3,13 @@ import { z } from "zod";
 
 import { pushDelta } from "@/lib/sync/service";
 import type { SyncDeltaPushRequest } from "@/lib/sync/contracts";
-import { validateTokenSyncAuth } from "@/lib/sync/http";
+import { validateTokenSyncAuth, handleSyncOptions } from "@/lib/sync/http";
+
+export const runtime = "nodejs";
+
+export async function OPTIONS(request: Request) {
+  return handleSyncOptions(request);
+}
 
 const TableHashesSchema = z.object({
   projects: z.string(),
