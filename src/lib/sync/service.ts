@@ -255,11 +255,23 @@ export async function pushDelta(
     
     // Fallback: jeśli serwer nie ma danych lub wersja bazy się nie zgadza
     if (!current || !current.archive || typeof current.archive !== 'object') {
-       throw new Error("Cannot apply delta without a valid full base snapshot on server");
+       return {
+         ok: true,
+         accepted: false,
+         revision: current?.revision ?? 0,
+         serverTableHashes: req.tableHashes,
+         reason: "no_base_snapshot",
+       };
     }
-    
+
     if (current.revision !== req.baseRevision) {
-        throw new Error(`Revision mismatch: Server at ${current.revision}, delta based on ${req.baseRevision}`);
+        return {
+          ok: true,
+          accepted: false,
+          revision: current.revision,
+          serverTableHashes: req.tableHashes,
+          reason: "revision_mismatch",
+        };
     }
 
     const archive = JSON.parse(JSON.stringify(current.archive)) as any;
