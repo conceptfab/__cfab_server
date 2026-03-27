@@ -123,7 +123,7 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     syncApiTokenSecret,
     syncMaxPayloadBytes: parseIntEnv(
       env.SYNC_MAX_PAYLOAD_BYTES,
-      5 * 1024 * 1024,
+      20 * 1024 * 1024,
       "SYNC_MAX_PAYLOAD_BYTES",
     ),
     syncAllowedOrigins: parseCsv(env.SYNC_ALLOWED_ORIGINS),

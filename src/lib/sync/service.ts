@@ -66,11 +66,102 @@ function deviceAckedSnapshot(device: UserSyncRecord["devices"][string], revision
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Merge helpers — upsert rows by primary key, newer updated_at wins
+// ---------------------------------------------------------------------------
+
+function upsertRows(
+  existing: any[],
+  incoming: any[],
+  pk: string = "id",
+): any[] {
+  const map = new Map<string | number, any>();
+  for (const row of existing) {
+    map.set(row[pk], row);
+  }
+  for (const row of incoming) {
+    const key = row[pk];
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, row);
+    } else if (row.updated_at && prev.updated_at && row.updated_at > prev.updated_at) {
+      map.set(key, row);
+    } else if (!prev.updated_at) {
+      map.set(key, row);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function mergeArchiveData(
+  base: any,
+  incoming: any,
+): any {
+  const baseData = base?.data ?? base ?? {};
+  const incData = incoming?.data ?? incoming ?? {};
+
+  const merged = JSON.parse(JSON.stringify(base));
+  const target = merged.data ?? merged;
+
+  target.projects = upsertRows(
+    Array.isArray(baseData.projects) ? baseData.projects : [],
+    Array.isArray(incData.projects) ? incData.projects : [],
+  );
+  target.applications = upsertRows(
+    Array.isArray(baseData.applications) ? baseData.applications : [],
+    Array.isArray(incData.applications) ? incData.applications : [],
+  );
+  target.sessions = upsertRows(
+    Array.isArray(baseData.sessions) ? baseData.sessions : [],
+    Array.isArray(incData.sessions) ? incData.sessions : [],
+  );
+  target.manual_sessions = upsertRows(
+    Array.isArray(baseData.manual_sessions) ? baseData.manual_sessions : [],
+    Array.isArray(incData.manual_sessions) ? incData.manual_sessions : [],
+    "uuid",
+  );
+
+  // daily_files: merge keys, incoming wins on conflict
+  if (incData.daily_files && typeof incData.daily_files === "object") {
+    if (!target.daily_files || typeof target.daily_files !== "object") {
+      target.daily_files = {};
+    }
+    Object.assign(target.daily_files, incData.daily_files);
+  }
+
+  // Apply tombstones from incoming: remove deleted rows
+  const tombstones = Array.isArray(incData.tombstones) ? incData.tombstones : [];
+  for (const ts of tombstones) {
+    const tableName = ts.table_name as string;
+    if (Array.isArray(target[tableName])) {
+      const recordId = ts.record_id ?? ts.record_uuid;
+      const pk = ts.record_uuid ? "uuid" : "id";
+      target[tableName] = target[tableName].filter(
+        (r: any) => r[pk] !== recordId,
+      );
+    }
+  }
+
+  // Update metadata
+  if (merged.exported_at && incoming.exported_at && incoming.exported_at > merged.exported_at) {
+    merged.exported_at = incoming.exported_at;
+  }
+  if (merged.metadata && target.sessions) {
+    merged.metadata.total_sessions = target.sessions.length;
+  }
+
+  return merged;
+}
+
 function pruneDeliveredArchives(user: UserSyncRecord): void {
   if (user.snapshots.length === 0) return;
 
+  // Never prune the latest snapshot — it's needed as base for delta pushes
+  const latestRevision = user.latestSnapshot?.revision ?? -1;
+
   for (const snapshot of user.snapshots) {
     if (snapshot.archive === null) continue;
+    if (snapshot.revision === latestRevision) continue;
 
     const targetDevices = Object.entries(user.devices).filter(
       ([deviceId]) => deviceId !== snapshot.sourceDeviceId,
@@ -186,8 +277,7 @@ export async function pushSnapshot(
   repository: SyncRepository = getSyncRepository(),
 ): Promise<SyncPushResponse> {
   const env = getEnv();
-  const payloadSha256 = sha256Json(req.archive);
-  const archiveSizeBytes = jsonByteSize(req.archive);
+  const incomingSha256 = sha256Json(req.archive);
 
   return repository.withUserState(req.userId, (user) => {
     const current = user.latestSnapshot;
@@ -195,10 +285,10 @@ export async function pushSnapshot(
       user,
       req.deviceId,
       req.knownServerRevision ?? current?.revision ?? null,
-      payloadSha256,
+      incomingSha256,
     );
 
-    if (current && current.payloadSha256 === payloadSha256) {
+    if (current && current.payloadSha256 === incomingSha256) {
       return {
         ok: true,
         accepted: true,
@@ -211,17 +301,26 @@ export async function pushSnapshot(
       };
     }
 
+    // Merge incoming data with existing snapshot instead of replacing
+    const mergedArchive =
+      current?.archive && typeof current.archive === "object"
+        ? mergeArchiveData(current.archive, req.archive)
+        : req.archive;
+
+    const mergedSha256 = sha256Json(mergedArchive);
+    const mergedSizeBytes = jsonByteSize(mergedArchive);
+
     const receivedAt = nowIso();
     const nextRevision = (current?.revision ?? 0) + 1;
 
     user.snapshots.push({
       id: randomUUID(),
       revision: nextRevision,
-      payloadSha256,
+      payloadSha256: mergedSha256,
       receivedAt,
       sourceDeviceId: req.deviceId,
-      sizeBytes: archiveSizeBytes,
-      archive: req.archive,
+      sizeBytes: mergedSizeBytes,
+      archive: mergedArchive,
     });
 
     const retention = env.syncSnapshotRetentionCount;
@@ -237,9 +336,9 @@ export async function pushSnapshot(
       noOp: false,
       userId: req.userId,
       revision: nextRevision,
-      payloadSha256,
+      payloadSha256: mergedSha256,
       receivedAt,
-      reason: "snapshot_saved",
+      reason: "snapshot_merged",
     };
   });
 }
@@ -275,17 +374,19 @@ export async function pushDelta(
     }
 
     const archive = JSON.parse(JSON.stringify(current.archive)) as any;
-    
-    // upsert helper
+    // Data lives under archive.data (ExportArchive structure)
+    const data = archive.data ?? archive;
+
+    // upsert helper — operates on archive.data, not archive root
     const applyUpserts = (tableName: keyof DeltaData, pk: string = 'id') => {
        const rows = req.delta[tableName as keyof typeof req.delta];
        if (!Array.isArray(rows) || rows.length === 0) return;
-       
-       if (!archive[tableName]) archive[tableName] = [];
-       const table = archive[tableName] as any[];
-       
+
+       if (!data[tableName]) data[tableName] = [];
+       const table = data[tableName] as any[];
+
        for (const inc of rows as any[]) {
-           const existingIdx = table.findIndex(r => r[pk] === inc[pk]);
+           const existingIdx = table.findIndex((r: any) => r[pk] === inc[pk]);
            if (existingIdx >= 0) {
                table[existingIdx] = inc;
            } else {
@@ -302,9 +403,9 @@ export async function pushDelta(
     // apply tombstones
     if (Array.isArray(req.delta.tombstones)) {
         for (const ts of req.delta.tombstones) {
-            const table = archive[ts.table_name];
+            const table = data[ts.table_name];
             if (Array.isArray(table)) {
-                archive[ts.table_name] = table.filter(r => r.id !== ts.record_id);
+                data[ts.table_name] = table.filter((r: any) => r.id !== ts.record_id);
             }
         }
     }
