@@ -1,4 +1,8 @@
-import type { TableHashes } from "./contracts";
+import type { TableHashes } from "@/lib/sync/contracts";
+
+// ---------------------------------------------------------------------------
+// Session status & step log
+// ---------------------------------------------------------------------------
 
 export type SyncSessionStatus =
   | "awaiting_peer"
@@ -8,6 +12,8 @@ export type SyncSessionStatus =
   | "failed"
   | "expired"
   | "cancelled";
+
+export type SyncMode = "full" | "delta";
 
 export interface SyncStepLog {
   step: number;
@@ -26,28 +32,30 @@ export interface SyncSession {
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
-
   masterDeviceId: string;
   slaveDeviceId: string | null;
-
-  syncMode: "full" | "delta" | null;
+  syncMode: SyncMode | null;
   masterMarkerHash: string | null;
   slaveMarkerHash: string | null;
   masterTableHashes: TableHashes | null;
   slaveTableHashes: TableHashes | null;
-
   currentStep: number;
   stepLog: SyncStepLog[];
-
   storageSessionPath: string | null;
   storageCredentialsSentAt: string | null;
-
   resultMarkerHash: string | null;
   completedAt: string | null;
   errorMessage: string | null;
 }
 
-// --- Request/Response types ---
+export interface SessionStoreFile {
+  version: 1;
+  sessions: Record<string, SyncSession>;
+}
+
+// ---------------------------------------------------------------------------
+// Request / response bodies
+// ---------------------------------------------------------------------------
 
 export interface SessionCreateBody {
   deviceId: string;
@@ -62,7 +70,7 @@ export interface SessionCreateResponse {
   status: SyncSessionStatus;
   peerDeviceId: string | null;
   peerMarkerHash: string | null;
-  syncMode: "full" | "delta" | null;
+  syncMode: SyncMode | null;
 }
 
 export interface SessionStatusResponse {
@@ -71,7 +79,7 @@ export interface SessionStatusResponse {
   status: SyncSessionStatus;
   myRole: "master" | "slave";
   currentStep: number;
-  syncMode: "full" | "delta" | null;
+  syncMode: SyncMode | null;
   peerDeviceId: string | null;
   peerReady: boolean;
   nextAction: string | null;
@@ -95,7 +103,7 @@ export interface SessionReportResponse {
 
 export interface SessionHeartbeatBody {
   deviceId: string;
-  currentStep: number;
+  currentStep?: number;
   transferProgress?: {
     bytesTransferred: number;
     bytesTotal: number;
@@ -118,9 +126,4 @@ export interface SessionCancelResponse {
   ok: true;
   cancelled: boolean;
   sessionId: string;
-}
-
-export interface SessionStoreFile {
-  version: 1;
-  sessions: Record<string, SyncSession>;
 }
