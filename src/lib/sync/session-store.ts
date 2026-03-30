@@ -289,6 +289,13 @@ export async function findAndJoinOrCreate(
   });
 }
 
+export async function getAllSessions(): Promise<SyncSession[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.sessions);
+  });
+}
+
 export async function getSession(sessionId: string): Promise<SyncSession | null> {
   return withMutex(async () => {
     const store = await readStore();

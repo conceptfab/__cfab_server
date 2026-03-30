@@ -7,11 +7,15 @@ import {
   SYNC_DASHBOARD_AUTH_COOKIE,
   getDashboardUserIdFromCookie,
 } from "@/lib/auth/dashboard-page-auth";
+import { getEnv } from "@/lib/config/env";
 import {
   getSyncDashboardSummary,
   type SyncDashboardUserSummary,
   type SyncDeliveryStatus,
 } from "@/lib/sync/repository";
+import type { SyncSession, SyncSessionStatus } from "@/lib/sync/session-contracts";
+import { getAllSessions } from "@/lib/sync/session-store";
+import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,6 +74,27 @@ function formatUptime(totalSeconds: number): string {
   return parts.join(" ");
 }
 
+function sessionStatusBadge(status: SyncSessionStatus): { label: string; className: string } {
+  switch (status) {
+    case "awaiting_peer":
+      return { label: "Oczekuje na peera", className: "border-amber-500/40 bg-amber-500/10 text-amber-200" };
+    case "negotiating":
+      return { label: "Negocjacja", className: "border-blue-500/40 bg-blue-500/10 text-blue-200" };
+    case "in_progress":
+      return { label: "W toku", className: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200" };
+    case "completed":
+      return { label: "Zakonczona", className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" };
+    case "failed":
+      return { label: "Blad", className: "border-rose-500/40 bg-rose-500/10 text-rose-200" };
+    case "expired":
+      return { label: "Wygasla", className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
+    case "cancelled":
+      return { label: "Anulowana", className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
+    default:
+      return { label: status, className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
+  }
+}
+
 async function resolveSearchParams(
   searchParams: HomePageProps["searchParams"],
 ): Promise<SearchParamsRecord> {
@@ -110,6 +135,8 @@ function UserStatusView({
   storeFile,
   dataDir,
   resetState,
+  sessions,
+  sftpHealth,
 }: {
   userId: string;
   user: SyncDashboardUserSummary | null;
@@ -117,6 +144,8 @@ function UserStatusView({
   storeFile: string;
   dataDir: string;
   resetState: string | null;
+  sessions: SyncSession[];
+  sftpHealth: SftpHealthStatus;
 }) {
   const hasResettableData = user !== null && (user.snapshotCount > 0 || user.deviceCount > 0);
 
@@ -327,6 +356,152 @@ function UserStatusView({
           </>
         )}
 
+        {/* --- Aktywne sesje sync (Online) --- */}
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+          <h2 className="text-sm font-medium text-zinc-200">Aktywne sesje sync (Online)</h2>
+          {sessions.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">Brak aktywnych sesji online sync.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="px-3 py-2">ID</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Master</th>
+                    <th className="px-3 py-2">Slave</th>
+                    <th className="px-3 py-2">Tryb</th>
+                    <th className="px-3 py-2">Krok</th>
+                    <th className="px-3 py-2">Utworzona</th>
+                    <th className="px-3 py-2">Wygasa</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800">
+                  {sessions.map((session) => {
+                    const sBadge = sessionStatusBadge(session.status);
+                    const isExpired = new Date(session.expiresAt).getTime() < Date.now();
+                    return (
+                      <tr key={session.id}>
+                        <td className="px-3 py-3 font-mono text-xs text-zinc-200">
+                          {session.id.slice(0, 8)}
+                        </td>
+                        <td className="px-3 py-3">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${sBadge.className}`}
+                          >
+                            {sBadge.label}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 font-mono text-xs text-zinc-300">
+                          {session.masterDeviceId.slice(0, 12)}
+                        </td>
+                        <td className="px-3 py-3 font-mono text-xs text-zinc-300">
+                          {session.slaveDeviceId ? session.slaveDeviceId.slice(0, 12) : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-zinc-300">
+                          {session.syncMode ?? "—"}
+                        </td>
+                        <td className="px-3 py-3 text-zinc-300">
+                          {session.currentStep}/13
+                        </td>
+                        <td className="px-3 py-3 text-zinc-300">
+                          {formatDate(session.createdAt)}
+                        </td>
+                        <td className={`px-3 py-3 ${isExpired ? "text-rose-300" : "text-zinc-300"}`}>
+                          {formatDate(session.expiresAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* --- Konfiguracja SFTP --- */}
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+          <h2 className="text-sm font-medium text-zinc-200">Konfiguracja SFTP</h2>
+          <div className="mt-4 grid gap-2 text-sm text-zinc-400 sm:grid-cols-2">
+            <div>
+              SFTP Host:{" "}
+              <span className="text-zinc-200">{getEnv().sftpHost ?? "nie skonfigurowano"}</span>
+            </div>
+            <div>
+              SFTP Port:{" "}
+              <span className="text-zinc-200">{getEnv().sftpPort}</span>
+            </div>
+            <div>
+              SFTP User:{" "}
+              <span className="text-zinc-200">{getEnv().sftpUser ?? "—"}</span>
+            </div>
+            <div>
+              SFTP Base Path:{" "}
+              <span className="text-zinc-200">{getEnv().sftpBasePath}</span>
+            </div>
+            <div>
+              Max rozmiar pliku:{" "}
+              <span className="text-zinc-200">{getEnv().sftpMaxFileSizeMb} MB</span>
+            </div>
+            <div>
+              Klucz szyfrowania:{" "}
+              {getEnv().syncEncryptionKey ? (
+                <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-300">
+                  skonfigurowany
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full border border-rose-500/40 bg-rose-500/10 px-2.5 py-0.5 text-xs text-rose-200">
+                  brak
+                </span>
+              )}
+            </div>
+            <div>
+              Status:{" "}
+              {sftpHealth.available ? (
+                <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-300">
+                  Polaczony
+                </span>
+              ) : sftpHealth.error === "SFTP not configured" ? (
+                <span className="inline-flex items-center rounded-full border border-zinc-500/40 bg-zinc-500/10 px-2.5 py-0.5 text-xs text-zinc-300">
+                  Nie skonfigurowano
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full border border-rose-500/40 bg-rose-500/10 px-2.5 py-0.5 text-xs text-rose-200">
+                  Niedostepny
+                </span>
+              )}
+            </div>
+            <div>
+              Aktywne sesje na SFTP:{" "}
+              <span className="text-zinc-200">{sftpHealth.activeSessions}</span>
+            </div>
+            <div>
+              Ostatnie sprawdzenie:{" "}
+              <span className="text-zinc-200">{formatDate(sftpHealth.lastCheckAt)}</span>
+            </div>
+            {sftpHealth.error && sftpHealth.error !== "SFTP not configured" ? (
+              <div className="sm:col-span-2">
+                Blad:{" "}
+                <span className="text-rose-300">{sftpHealth.error}</span>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        {/* --- Licencje (placeholder) --- */}
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-medium text-zinc-200">Licencje i grupy klientow</h2>
+            <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+              Wkrotce
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">
+            Zarzadzanie licencjami, planami (free/starter/pro/enterprise), grupami klientow
+            i przypisaniem urzadzen. Funkcja zostanie dodana w kolejnej fazie wdrozenia.
+          </p>
+        </section>
+
         <section className="rounded-2xl border border-rose-500/30 bg-zinc-900/70 p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="max-w-3xl">
@@ -374,7 +549,11 @@ export default async function Home({ searchParams }: HomePageProps) {
       return <LoginView authState={authState} />;
     }
 
-    const summary = await getSyncDashboardSummary();
+    const [summary, sessions, sftpHealth] = await Promise.all([
+      getSyncDashboardSummary(),
+      getAllSessions(),
+      healthCheck(),
+    ]);
     const user = summary.users.find((entry) => entry.userId === loggedUserId) ?? null;
 
     return (
@@ -385,6 +564,8 @@ export default async function Home({ searchParams }: HomePageProps) {
         storeFile={summary.storeFile}
         dataDir={summary.dataDir}
         resetState={resetState}
+        sessions={sessions}
+        sftpHealth={sftpHealth}
       />
     );
   } catch (error) {
