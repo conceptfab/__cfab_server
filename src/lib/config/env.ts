@@ -27,6 +27,7 @@ export interface AppEnv {
   sftpBasePath: string;
   sftpMaxFileSizeMb: number;
   syncEncryptionKey: string | null;
+  adminApiToken: string | null;
 }
 
 let cachedEnv: AppEnv | null = null;
@@ -178,6 +179,7 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     sftpBasePath: env.SFTP_BASE_PATH?.trim() || "/timeflow-sync/",
     sftpMaxFileSizeMb: parseIntEnv(env.SFTP_MAX_FILE_SIZE_MB, 100, "SFTP_MAX_FILE_SIZE_MB"),
     syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
+    adminApiToken: env.ADMIN_API_TOKEN?.trim() || null,
   };
 
   if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
