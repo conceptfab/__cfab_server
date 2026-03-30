@@ -1,0 +1,46 @@
+import { expireSessions, cleanupOldSessions } from "./session-store";
+import { log } from "@/lib/observability/logger";
+
+let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+let initialized = false;
+
+const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function startSessionCleanup(): void {
+  if (cleanupInterval) return;
+  runCleanup();
+  cleanupInterval = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+  log("info", "session-cleanup.started", { intervalMs: CLEANUP_INTERVAL_MS });
+}
+
+export function stopSessionCleanup(): void {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+    log("info", "session-cleanup.stopped", {});
+  }
+}
+
+function runCleanup(): void {
+  void (async () => {
+    try {
+      const expired = await expireSessions();
+      const removed = await cleanupOldSessions(MAX_SESSION_AGE_MS);
+      if (expired > 0 || removed > 0) {
+        log("info", "session-cleanup.completed", { expired, removed });
+      }
+    } catch (error) {
+      log("error", "session-cleanup.error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  })();
+}
+
+export function ensureCleanupRunning(): void {
+  if (!initialized) {
+    initialized = true;
+    startSessionCleanup();
+  }
+}

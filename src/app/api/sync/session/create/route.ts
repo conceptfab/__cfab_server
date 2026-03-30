@@ -2,6 +2,7 @@ import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { handleSessionCreate } from "@/lib/sync/session-service";
 import type { SessionCreateBody } from "@/lib/sync/session-contracts";
 import { badRequest } from "@/lib/http/error";
+import { ensureCleanupRunning } from "@/lib/sync/session-cleanup";
 
 export const runtime = "nodejs";
 
@@ -10,6 +11,7 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function POST(request: Request) {
+  ensureCleanupRunning();
   return handleSyncPost<SessionCreateBody, Awaited<ReturnType<typeof handleSessionCreate>>>(request, {
     route: "session-create",
     parseBody: (raw: unknown) => {
