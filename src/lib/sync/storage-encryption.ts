@@ -16,6 +16,7 @@ export interface SftpCredentialsPayload {
   password: string;
   uploadPath: string;
   downloadPath: string;
+  fileEncryptionKey: string; // base64 key for encrypting files on storage
 }
 
 export interface EncryptedCredentials {
@@ -100,9 +101,9 @@ export function decryptCredentials(
   return JSON.parse(decrypted.toString("utf-8")) as SftpCredentialsPayload;
 }
 
-// --- File encryption key for clients ---
+// --- File encryption key derivation (internal) ---
 
-export function deriveFileEncryptionKey(sessionId: string): string {
+function deriveFileEncryptionKey(sessionId: string): string {
   const env = getEnv();
   if (!env.syncEncryptionKey) {
     throw new Error("SYNC_ENCRYPTION_KEY not configured");
@@ -114,4 +115,17 @@ export function deriveFileEncryptionKey(sessionId: string): string {
     "file-encryption",
   );
   return key.toString("base64");
+}
+
+// --- Build full credentials payload with file key included ---
+
+export type SftpConnectionInfo = Omit<SftpCredentialsPayload, "fileEncryptionKey">;
+
+export function encryptCredentialsWithFileKey(
+  connection: SftpConnectionInfo,
+  sessionId: string,
+): EncryptedCredentials {
+  const fileEncryptionKey = deriveFileEncryptionKey(sessionId);
+  const payload: SftpCredentialsPayload = { ...connection, fileEncryptionKey };
+  return encryptCredentials(payload, sessionId);
 }

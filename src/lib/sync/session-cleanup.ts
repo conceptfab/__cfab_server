@@ -31,16 +31,21 @@ export function stopSessionCleanup(): void {
 function runCleanup(): void {
   void (async () => {
     try {
+      // 1. Mark timed-out sessions as expired
       const expired = await expireSessions();
-      const removed = await cleanupOldSessions(MAX_SESSION_AGE_MS);
 
-      // Clean up SFTP dirs for completed/failed/expired sessions
+      // 2. Get terminal sessions (with storagePath) BEFORE removing from JSON
       const completedIds = await getCompletedSessionIds();
+
+      // 3. Delete SFTP dirs for those sessions first
       for (const id of completedIds) {
         await deleteSessionDir(id);
       }
 
-      // Orphan detection: SFTP dirs without active sessions
+      // 4. Now safe to remove sessions from JSON store
+      const removed = await cleanupOldSessions(MAX_SESSION_AGE_MS);
+
+      // 5. Orphan detection (safety net): SFTP dirs without active sessions
       try {
         const sftpDirs = await listSessionDirs();
         const activeIds = await getActiveSessionIds();

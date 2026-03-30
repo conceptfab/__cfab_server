@@ -7,7 +7,7 @@ import type { EncryptedCredentials } from "./storage-encryption";
 
 export interface StorageCredentials {
   encrypted: EncryptedCredentials;
-  fileEncryptionKey: string; // base64 key for encrypting files on storage
+  // fileEncryptionKey is now included INSIDE the encrypted payload (C1 security fix)
 }
 
 // ---------------------------------------------------------------------------

@@ -180,6 +180,14 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
   };
 
+  if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
+    throw new Error("SYNC_ENCRYPTION_KEY must be at least 32 characters");
+  }
+
+  if (config.isProduction && config.sftpHost && !config.syncEncryptionKey) {
+    throw new Error("Production with SFTP requires SYNC_ENCRYPTION_KEY");
+  }
+
   if (config.isProduction && config.syncAuthMode === "token") {
     if (config.syncApiTokens.size === 0) {
       throw new Error(

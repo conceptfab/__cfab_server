@@ -10,7 +10,7 @@ import type {
   SessionStatusResponse,
   SyncSession,
 } from "@/lib/sync/session-contracts";
-import type { SftpCredentialsPayload } from "./storage-encryption";
+import type { SftpConnectionInfo } from "./storage-encryption";
 import { resolveRole } from "@/lib/sync/session-roles";
 import {
   cancelSession,
@@ -21,7 +21,7 @@ import {
   updateSessionStorage,
 } from "@/lib/sync/session-store";
 import { createSessionDir } from "./sftp-manager";
-import { encryptCredentials, deriveFileEncryptionKey } from "./storage-encryption";
+import { encryptCredentialsWithFileKey } from "./storage-encryption";
 import { getEnv } from "@/lib/config/env";
 import { log } from "@/lib/observability/logger";
 
@@ -104,7 +104,7 @@ export async function handleSessionCreate(
       if (env.sftpHost && env.sftpUser && env.sftpPassword && env.syncEncryptionKey) {
         const sessionPath = await createSessionDir(session.id);
 
-        const payload: SftpCredentialsPayload = {
+        const connection: SftpConnectionInfo = {
           host: env.sftpHost,
           port: env.sftpPort,
           protocol: "sftp",
@@ -114,12 +114,10 @@ export async function handleSessionCreate(
           downloadPath: `${sessionPath}/master-merged/`,
         };
 
-        const encrypted = encryptCredentials(payload, session.id);
-        const fileKey = deriveFileEncryptionKey(session.id);
+        const encrypted = encryptCredentialsWithFileKey(connection, session.id);
 
         await updateSessionStorage(session.id, sessionPath, {
           encrypted,
-          fileEncryptionKey: fileKey,
         });
       }
     } catch (error) {
