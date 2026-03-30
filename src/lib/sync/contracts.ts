@@ -20,8 +20,8 @@ export interface DeltaData {
   manual_sessions: any[];
   tombstones: {
     table_name: string;
-    record_id: string;
-    record_uuid: string;
+    record_id: number | string | null;
+    record_uuid: string | null;
     deleted_at: string;
     sync_key: string;
   }[];

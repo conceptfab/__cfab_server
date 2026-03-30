@@ -373,26 +373,35 @@ export async function pushDelta(
         };
     }
 
-    const archive = JSON.parse(JSON.stringify(current.archive)) as any;
-    // Data lives under archive.data (ExportArchive structure)
-    const data = archive.data ?? archive;
+    // Shallow-copy only the arrays that will be mutated (avoids full deep-clone)
+    const baseArchive = current.archive as any;
+    const baseData = baseArchive.data ?? baseArchive;
+    const archive = { ...baseArchive };
+    const data = { ...baseData };
+    if (baseArchive.data) archive.data = data;
 
-    // upsert helper — operates on archive.data, not archive root
+    // upsert helper — uses Map for O(1) lookups instead of findIndex O(N)
     const applyUpserts = (tableName: keyof DeltaData, pk: string = 'id') => {
        const rows = req.delta[tableName as keyof typeof req.delta];
        if (!Array.isArray(rows) || rows.length === 0) return;
 
-       if (!data[tableName]) data[tableName] = [];
-       const table = data[tableName] as any[];
+       const existing = Array.isArray(data[tableName]) ? data[tableName] as any[] : [];
+       const table = [...existing];
+       const indexMap = new Map<unknown, number>();
+       for (let i = 0; i < table.length; i++) {
+           indexMap.set(table[i][pk], i);
+       }
 
        for (const inc of rows as any[]) {
-           const existingIdx = table.findIndex((r: any) => r[pk] === inc[pk]);
-           if (existingIdx >= 0) {
-               table[existingIdx] = inc;
+           const idx = indexMap.get(inc[pk]);
+           if (idx !== undefined) {
+               table[idx] = inc;
            } else {
+               indexMap.set(inc[pk], table.length);
                table.push(inc);
            }
        }
+       data[tableName] = table;
     };
 
     applyUpserts('projects');
@@ -400,12 +409,14 @@ export async function pushDelta(
     applyUpserts('sessions');
     applyUpserts('manual_sessions');
 
-    // apply tombstones
+    // apply tombstones — resolve pk the same way mergeArchiveData does
     if (Array.isArray(req.delta.tombstones)) {
         for (const ts of req.delta.tombstones) {
             const table = data[ts.table_name];
             if (Array.isArray(table)) {
-                data[ts.table_name] = table.filter((r: any) => r.id !== ts.record_id);
+                const recordId = ts.record_uuid ?? ts.record_id;
+                const pk = ts.record_uuid ? "uuid" : "id";
+                data[ts.table_name] = table.filter((r: any) => r[pk] !== recordId);
             }
         }
     }
