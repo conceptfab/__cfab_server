@@ -1,4 +1,10 @@
-import { expireSessions, cleanupOldSessions } from "./session-store";
+import {
+  expireSessions,
+  cleanupOldSessions,
+  getCompletedSessionIds,
+  getActiveSessionIds,
+} from "./session-store";
+import { deleteSessionDir, listSessionDirs } from "./sftp-manager";
 import { log } from "@/lib/observability/logger";
 
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -27,6 +33,27 @@ function runCleanup(): void {
     try {
       const expired = await expireSessions();
       const removed = await cleanupOldSessions(MAX_SESSION_AGE_MS);
+
+      // Clean up SFTP dirs for completed/failed/expired sessions
+      const completedIds = await getCompletedSessionIds();
+      for (const id of completedIds) {
+        await deleteSessionDir(id);
+      }
+
+      // Orphan detection: SFTP dirs without active sessions
+      try {
+        const sftpDirs = await listSessionDirs();
+        const activeIds = await getActiveSessionIds();
+        const activeSet = new Set(activeIds);
+        for (const dir of sftpDirs) {
+          if (!activeSet.has(dir)) {
+            await deleteSessionDir(dir);
+          }
+        }
+      } catch {
+        // SFTP may not be configured — ignore
+      }
+
       if (expired > 0 || removed > 0) {
         log("info", "session-cleanup.completed", { expired, removed });
       }

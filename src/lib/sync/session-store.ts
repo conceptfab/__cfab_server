@@ -5,6 +5,7 @@ import path from "node:path";
 import type { TableHashes } from "@/lib/sync/contracts";
 import type {
   SessionStoreFile,
+  StorageCredentials,
   SyncSession,
   SyncSessionStatus,
   SyncStepLog,
@@ -126,6 +127,7 @@ export async function createSession(
       currentStep: 0,
       stepLog: [],
       storageSessionPath: null,
+      storageCredentials: null,
       storageCredentialsSentAt: null,
       resultMarkerHash: null,
       completedAt: null,
@@ -275,6 +277,7 @@ export async function findAndJoinOrCreate(
         },
       ],
       storageSessionPath: null,
+      storageCredentials: null,
       storageCredentialsSentAt: null,
       resultMarkerHash: null,
       completedAt: null,
@@ -473,5 +476,48 @@ export async function cleanupOldSessions(maxAgeMs: number): Promise<number> {
       await writeStore(store);
     }
     return count;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Storage helpers
+// ---------------------------------------------------------------------------
+
+export async function updateSessionStorage(
+  sessionId: string,
+  storagePath: string,
+  credentials: StorageCredentials,
+): Promise<void> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const session = store.sessions[sessionId];
+    if (!session) return;
+    session.storageSessionPath = storagePath;
+    session.storageCredentials = credentials;
+    session.storageCredentialsSentAt = new Date().toISOString();
+    session.updatedAt = new Date().toISOString();
+    await writeStore(store);
+  });
+}
+
+/** Get IDs of sessions in terminal state that have a storageSessionPath */
+export async function getCompletedSessionIds(): Promise<string[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const terminal = ["completed", "failed", "expired", "cancelled"];
+    return Object.values(store.sessions)
+      .filter((s) => terminal.includes(s.status) && s.storageSessionPath)
+      .map((s) => s.id);
+  });
+}
+
+/** Get IDs of sessions in active (non-terminal) state */
+export async function getActiveSessionIds(): Promise<string[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const terminal = ["completed", "failed", "expired", "cancelled"];
+    return Object.values(store.sessions)
+      .filter((s) => !terminal.includes(s.status))
+      .map((s) => s.id);
   });
 }

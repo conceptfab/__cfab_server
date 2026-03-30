@@ -1,4 +1,14 @@
 import type { TableHashes } from "@/lib/sync/contracts";
+import type { EncryptedCredentials } from "./storage-encryption";
+
+// ---------------------------------------------------------------------------
+// Storage credentials (encrypted SFTP creds for clients)
+// ---------------------------------------------------------------------------
+
+export interface StorageCredentials {
+  encrypted: EncryptedCredentials;
+  fileEncryptionKey: string; // base64 key for encrypting files on storage
+}
 
 // ---------------------------------------------------------------------------
 // Session status & step log
@@ -42,6 +52,7 @@ export interface SyncSession {
   currentStep: number;
   stepLog: SyncStepLog[];
   storageSessionPath: string | null;
+  storageCredentials: StorageCredentials | null;
   storageCredentialsSentAt: string | null;
   resultMarkerHash: string | null;
   completedAt: string | null;
@@ -84,6 +95,7 @@ export interface SessionStatusResponse {
   peerReady: boolean;
   nextAction: string | null;
   expiresAt: string;
+  storageCredentials: StorageCredentials | null;
 }
 
 export interface SessionReportBody {
