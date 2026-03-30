@@ -193,6 +193,99 @@ export async function joinSession(
   });
 }
 
+// C1: Atomic find-and-join-or-create to prevent race conditions in session pairing
+export async function findAndJoinOrCreate(
+  userId: string,
+  deviceId: string,
+  markerHash: string | null,
+  tableHashes: TableHashes | null,
+): Promise<{ session: SyncSession; role: "master" | "slave" }> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const now = Date.now();
+
+    // Find existing awaiting session for this user (different device)
+    for (const session of Object.values(store.sessions)) {
+      if (
+        session.userId === userId &&
+        session.status === "awaiting_peer" &&
+        session.masterDeviceId !== deviceId &&
+        new Date(session.expiresAt).getTime() > now
+      ) {
+        // Join as slave
+        const ts = nowIso();
+        session.slaveDeviceId = deviceId;
+        session.slaveMarkerHash = markerHash;
+        session.slaveTableHashes = tableHashes;
+        session.status = "negotiating";
+        session.currentStep = 2;
+        session.updatedAt = ts;
+
+        if (
+          session.masterMarkerHash &&
+          markerHash &&
+          session.masterMarkerHash === markerHash
+        ) {
+          session.syncMode = "delta";
+        } else {
+          session.syncMode = "full";
+        }
+
+        session.stepLog.push({
+          step: 2,
+          phase: "discovery",
+          action: "slave_joined",
+          deviceId,
+          timestamp: ts,
+          details: { slaveMarkerHash: markerHash, syncMode: session.syncMode },
+          status: "ok",
+        });
+
+        await writeStore(store);
+        return { session, role: "slave" as const };
+      }
+    }
+
+    // Create new session as master
+    const ts = nowIso();
+    const newSession: SyncSession = {
+      id: randomUUID(),
+      userId,
+      status: "awaiting_peer",
+      createdAt: ts,
+      updatedAt: ts,
+      expiresAt: new Date(now + SESSION_TTL_MS).toISOString(),
+      masterDeviceId: deviceId,
+      slaveDeviceId: null,
+      syncMode: null,
+      masterMarkerHash: markerHash,
+      slaveMarkerHash: null,
+      masterTableHashes: tableHashes,
+      slaveTableHashes: null,
+      currentStep: 1,
+      stepLog: [
+        {
+          step: 1,
+          phase: "discovery",
+          action: "session_created",
+          deviceId,
+          timestamp: ts,
+          details: { markerHash },
+          status: "ok",
+        },
+      ],
+      storageSessionPath: null,
+      storageCredentialsSentAt: null,
+      resultMarkerHash: null,
+      completedAt: null,
+      errorMessage: null,
+    };
+    store.sessions[newSession.id] = newSession;
+    await writeStore(store);
+    return { session: newSession, role: "master" as const };
+  });
+}
+
 export async function getSession(sessionId: string): Promise<SyncSession | null> {
   return withMutex(async () => {
     const store = await readStore();
@@ -212,6 +305,17 @@ export async function reportStep(
     const store = await readStore();
     const session = store.sessions[sessionId];
     if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    // C2: Ignore reports to terminal sessions
+    const TERMINAL_STATES = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL_STATES.includes(session.status)) {
+      return session;
+    }
+
+    // I6: Validate step range
+    if (step < 1 || step > 13) {
+      return session;
+    }
 
     const logEntry: SyncStepLog = {
       step,
@@ -272,7 +376,17 @@ export async function heartbeat(
     const session = store.sessions[sessionId];
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    session.expiresAt = new Date(Date.now() + HEARTBEAT_SLIDE_MS).toISOString();
+    // C2: Ignore heartbeats to terminal sessions
+    const TERMINAL_STATES_HB = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL_STATES_HB.includes(session.status)) {
+      return session;
+    }
+
+    // I3: Only extend TTL, never reduce it
+    const newExpiry = new Date(Date.now() + HEARTBEAT_SLIDE_MS).toISOString();
+    if (newExpiry > session.expiresAt) {
+      session.expiresAt = newExpiry;
+    }
     session.updatedAt = nowIso();
 
     await writeStore(store);
@@ -289,6 +403,12 @@ export async function cancelSession(
     const store = await readStore();
     const session = store.sessions[sessionId];
     if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    // C2: Ignore cancellation of terminal sessions
+    const TERMINAL_STATES_CS = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL_STATES_CS.includes(session.status)) {
+      return session;
+    }
 
     session.status = "cancelled";
     session.updatedAt = nowIso();

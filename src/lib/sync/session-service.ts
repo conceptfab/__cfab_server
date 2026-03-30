@@ -13,11 +13,9 @@ import type {
 import { resolveRole } from "@/lib/sync/session-roles";
 import {
   cancelSession,
-  createSession,
-  findAwaitingSession,
+  findAndJoinOrCreate,
   getSession,
   heartbeat,
-  joinSession,
   reportStep,
 } from "@/lib/sync/session-store";
 
@@ -85,35 +83,26 @@ export async function handleSessionCreate(
   userId: string,
   body: SessionCreateBody,
 ): Promise<SessionCreateResponse> {
-  // Check for existing awaiting session for this user from a different device
-  const existing = await findAwaitingSession(userId, body.deviceId);
-
-  if (existing) {
-    // Join as slave
-    const joined = await joinSession(
-      existing.id,
-      body.deviceId,
-      body.markerHash,
-      body.tableHashes,
-    );
-    return {
-      ok: true,
-      sessionId: joined.id,
-      role: "slave",
-      status: joined.status,
-      peerDeviceId: joined.masterDeviceId,
-      peerMarkerHash: joined.masterMarkerHash,
-      syncMode: joined.syncMode,
-    };
-  }
-
-  // Create new session as master
-  const session = await createSession(
+  // C1: Atomic find-and-join-or-create to prevent race condition in session pairing
+  const { session, role } = await findAndJoinOrCreate(
     userId,
     body.deviceId,
     body.markerHash,
     body.tableHashes,
   );
+
+  if (role === "slave") {
+    return {
+      ok: true,
+      sessionId: session.id,
+      role: "slave",
+      status: session.status,
+      peerDeviceId: session.masterDeviceId,
+      peerMarkerHash: session.masterMarkerHash,
+      syncMode: session.syncMode,
+    };
+  }
+
   return {
     ok: true,
     sessionId: session.id,
@@ -134,6 +123,10 @@ export async function handleSessionStatus(
   if (!session) throw new Error(`Session not found: ${sessionId}`);
   if (session.userId !== userId) {
     throw new Error("Session does not belong to this user");
+  }
+  // C3: Validate that the requesting device is a participant in this session
+  if (session.masterDeviceId !== deviceId && session.slaveDeviceId !== deviceId) {
+    throw new Error("Device not participant in this session");
   }
 
   const role = resolveRole(session.masterDeviceId, deviceId);
