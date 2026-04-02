@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+import { CreateLicenseForm } from "@/components/create-license-form";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
@@ -237,7 +238,7 @@ function ActiveSessionsSection({ sessions }: { sessions: SyncSession[] }) {
 // Section: Licencje
 // ---------------------------------------------------------------------------
 
-function LicensesSection({ licenses }: { licenses: License[] }) {
+function LicensesSection({ licenses, groups }: { licenses: License[]; groups: ClientGroup[] }) {
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
@@ -247,7 +248,7 @@ function LicensesSection({ licenses }: { licenses: License[] }) {
         </span>
       </div>
       {licenses.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak licencji. Uzyj API POST /api/admin/license aby utworzyc.</p>
+        <p className="mt-3 text-sm text-zinc-500">Brak licencji. Utworz pierwsza ponizej.</p>
       ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full text-left text-sm">
@@ -265,10 +266,11 @@ function LicensesSection({ licenses }: { licenses: License[] }) {
             <tbody className="divide-y divide-zinc-800">
               {licenses.map((lic) => {
                 const badge = licenseStatusBadge(lic.status);
+                const groupName = groups.find((g) => g.id === lic.groupId)?.name;
                 return (
                   <tr key={lic.id}>
                     <td className="px-3 py-3 font-mono text-xs text-zinc-200">{lic.id.slice(0, 8)}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{lic.licenseKey.slice(0, 10)}...</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{lic.licenseKey}</td>
                     <td className="px-3 py-3 text-zinc-300 uppercase text-xs">{lic.plan}</td>
                     <td className="px-3 py-3">
                       <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${badge.className}`}>
@@ -278,7 +280,7 @@ function LicensesSection({ licenses }: { licenses: License[] }) {
                     <td className="px-3 py-3 text-zinc-300">
                       {lic.activeDevices.length}/{lic.maxDevices}
                     </td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{lic.groupId.slice(0, 8)}</td>
+                    <td className="px-3 py-3 text-xs text-zinc-400">{groupName ?? lic.groupId.slice(0, 8)}</td>
                     <td className="px-3 py-3 text-zinc-300">{formatDate(lic.expiresAt)}</td>
                   </tr>
                 );
@@ -287,6 +289,7 @@ function LicensesSection({ licenses }: { licenses: License[] }) {
           </table>
         </div>
       )}
+      <CreateLicenseForm groups={groups.map((g) => ({ id: g.id, name: g.name }))} />
     </section>
   );
 }
@@ -737,7 +740,7 @@ function DashboardView({
         </header>
 
         <ActiveSessionsSection sessions={data.activeSessions} />
-        <LicensesSection licenses={data.licenses} />
+        <LicensesSection licenses={data.licenses} groups={data.groups} />
         <GroupsSection groups={data.groups} storageBackends={data.storageBackends} />
         <StorageBackendsSection storageBackends={data.storageBackends} />
         <DevicesSection devices={data.devices} />
