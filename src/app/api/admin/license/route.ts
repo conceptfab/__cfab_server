@@ -4,7 +4,7 @@ import type {
   AdminLicenseListResponse,
   AdminLicenseResponse,
 } from "@/lib/sync/license-contracts";
-import { createGroup } from "@/lib/sync/license-store";
+import { createGroup, updateGroup } from "@/lib/sync/license-store";
 import { createLicense, getAllLicenses } from "@/lib/sync/license-store";
 import { validateCreateLicenseBody } from "@/lib/sync/license-validation";
 import {
@@ -49,6 +49,9 @@ export async function POST(request: Request) {
         body.maxDevices,
         body.expiresAt,
       );
+
+      // Back-link: update the group with the newly created licenseId
+      await updateGroup(groupId, { licenseId: license.id });
 
       return { ok: true, license };
     },

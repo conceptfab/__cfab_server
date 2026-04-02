@@ -226,6 +226,7 @@ export async function updateGroup(
   id: string,
   updates: {
     name?: string;
+    licenseId?: string;
     storageBackendId?: string;
     fixedMasterDeviceId?: string | null;
     maxSyncFrequencyHours?: number | null;
@@ -238,6 +239,7 @@ export async function updateGroup(
     if (!group) return null;
 
     if (updates.name !== undefined) group.name = updates.name;
+    if (updates.licenseId !== undefined) group.licenseId = updates.licenseId;
     if (updates.storageBackendId !== undefined) group.storageBackendId = updates.storageBackendId;
     if (updates.fixedMasterDeviceId !== undefined) group.fixedMasterDeviceId = updates.fixedMasterDeviceId;
     if (updates.maxSyncFrequencyHours !== undefined) group.maxSyncFrequencyHours = updates.maxSyncFrequencyHours;
