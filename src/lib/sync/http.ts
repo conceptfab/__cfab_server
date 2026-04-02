@@ -17,7 +17,12 @@ type SyncRouteName =
   | "async-push"
   | "async-pending"
   | "async-ack"
-  | "async-reject";
+  | "async-reject"
+  | "online-status"
+  | "online-push"
+  | "online-delta-push"
+  | "online-delta-pull"
+  | "online-ack";
 
 export async function validateTokenSyncAuth(request: Request): Promise<string | null> {
     const authHeader = request.headers.get("authorization");

@@ -311,6 +311,40 @@ export async function registerDevice(
   });
 }
 
+/**
+ * Update lastSeenAt for a known device (called on every authenticated sync request).
+ * Fire-and-forget — failures are silently ignored so sync flow is not blocked.
+ */
+export async function touchDeviceLastSeen(deviceId: string): Promise<void> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const device = store.devices[deviceId];
+    if (!device) return;
+    device.lastSeenAt = nowIso();
+    await writeStore(store);
+  });
+}
+
+/**
+ * Update lastSyncAt and optionally lastMarkerHash after a completed sync.
+ */
+export async function updateDeviceLastSync(
+  deviceId: string,
+  markerHash?: string | null,
+): Promise<void> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const device = store.devices[deviceId];
+    if (!device) return;
+    device.lastSyncAt = nowIso();
+    device.lastSeenAt = nowIso();
+    if (markerHash !== undefined) {
+      device.lastMarkerHash = markerHash;
+    }
+    await writeStore(store);
+  });
+}
+
 export async function getDevice(deviceId: string): Promise<DeviceRegistration | null> {
   return withMutex(async () => {
     const store = await readStore();

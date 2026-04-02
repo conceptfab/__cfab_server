@@ -430,14 +430,45 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
 // Section: Urzadzenia
 // ---------------------------------------------------------------------------
 
+const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+function deviceStatus(d: DeviceRegistration): { label: string; color: string; border: string; bg: string } {
+  if (!d.lastSeenAt) {
+    return { label: "nieznany", color: "text-zinc-500", border: "border-zinc-600/40", bg: "bg-zinc-600/10" };
+  }
+  const elapsed = Date.now() - new Date(d.lastSeenAt).getTime();
+  if (elapsed < ONLINE_THRESHOLD_MS) {
+    if (d.lastSyncAt) {
+      return { label: "online \u2713", color: "text-emerald-300", border: "border-emerald-500/40", bg: "bg-emerald-500/10" };
+    }
+    return { label: "online", color: "text-sky-300", border: "border-sky-500/40", bg: "bg-sky-500/10" };
+  }
+  if (elapsed < 60 * 60 * 1000) {
+    return { label: "niedawno", color: "text-yellow-300", border: "border-yellow-500/40", bg: "bg-yellow-500/10" };
+  }
+  return { label: "offline", color: "text-zinc-500", border: "border-zinc-600/40", bg: "bg-zinc-600/10" };
+}
+
 function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
+  const onlineCount = devices.filter((d) => {
+    if (!d.lastSeenAt) return false;
+    return Date.now() - new Date(d.lastSeenAt).getTime() < ONLINE_THRESHOLD_MS;
+  }).length;
+
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-zinc-200">Zarejestrowane urzadzenia</h2>
-        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          {devices.length}
-        </span>
+        <div className="flex items-center gap-2">
+          {onlineCount > 0 && (
+            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-300">
+              {onlineCount} online
+            </span>
+          )}
+          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+            {devices.length}
+          </span>
+        </div>
       </div>
       {devices.length === 0 ? (
         <p className="mt-3 text-sm text-zinc-500">Brak zarejestrowanych urzadzen.</p>
@@ -446,6 +477,7 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
           <table className="min-w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-zinc-500">
               <tr>
+                <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Device ID</th>
                 <th className="px-3 py-2">Nazwa</th>
                 <th className="px-3 py-2">Grupa</th>
@@ -456,21 +488,29 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
-              {devices.map((d) => (
-                <tr key={d.deviceId}>
-                  <td className="px-3 py-3 font-mono text-xs text-zinc-200">{d.deviceId.slice(0, 12)}</td>
-                  <td className="px-3 py-3 text-zinc-200">{d.deviceName}</td>
-                  <td className="px-3 py-3 font-mono text-xs text-zinc-400">{d.groupId.slice(0, 8)}</td>
-                  <td className="px-3 py-3 text-zinc-300">
-                    {d.isFixedMaster ? (
-                      <span className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-300">master</span>
-                    ) : "\u2014"}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300">{formatDate(d.registeredAt)}</td>
-                  <td className="px-3 py-3 text-zinc-300">{formatDate(d.lastSeenAt)}</td>
-                  <td className="px-3 py-3 text-zinc-300">{formatDate(d.lastSyncAt)}</td>
-                </tr>
-              ))}
+              {devices.map((d) => {
+                const st = deviceStatus(d);
+                return (
+                  <tr key={d.deviceId}>
+                    <td className="px-3 py-3">
+                      <span className={`inline-flex items-center rounded-full border ${st.border} ${st.bg} px-2 py-0.5 text-[10px] font-medium ${st.color}`}>
+                        {st.label}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{d.deviceId.slice(0, 12)}</td>
+                    <td className="px-3 py-3 text-zinc-200">{d.deviceName}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{d.groupId.slice(0, 8)}</td>
+                    <td className="px-3 py-3 text-zinc-300">
+                      {d.isFixedMaster ? (
+                        <span className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-300">master</span>
+                      ) : "\u2014"}
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300">{formatDate(d.registeredAt)}</td>
+                    <td className="px-3 py-3 text-zinc-300">{formatDate(d.lastSeenAt)}</td>
+                    <td className="px-3 py-3 text-zinc-300">{formatDate(d.lastSyncAt)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
