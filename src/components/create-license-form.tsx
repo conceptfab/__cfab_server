@@ -1,6 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
+
+// ---------------------------------------------------------------------------
+// CreateLicenseForm
+// ---------------------------------------------------------------------------
 
 interface CreateLicenseFormProps {
   groups: { id: string; name: string }[];
@@ -25,9 +29,15 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
   const [creating, setCreating] = useState(false);
   const [result, setResult] = useState<CreateResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const submittingRef = useRef(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Prevent double-submit
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+
     setCreating(true);
     setResult(null);
     setCopied(false);
@@ -71,6 +81,7 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
       });
     } finally {
       setCreating(false);
+      submittingRef.current = false;
     }
   }
 
@@ -205,5 +216,51 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DeleteLicenseButton
+// ---------------------------------------------------------------------------
+
+interface DeleteLicenseButtonProps {
+  licenseId: string;
+}
+
+export function DeleteLicenseButton({ licenseId }: DeleteLicenseButtonProps) {
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    if (!confirm("Na pewno usunac te licencje? Operacja jest nieodwracalna.")) return;
+    if (deleting) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/license/${licenseId}`, {
+        method: "DELETE",
+      });
+      const json = await res.json();
+
+      if (json.ok && json.deleted) {
+        window.location.reload();
+      } else {
+        alert(json.error || "Nie udalo sie usunac licencji");
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDelete}
+      disabled={deleting}
+      className="inline-flex items-center rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+    >
+      {deleting ? "..." : "Usun"}
+    </button>
   );
 }

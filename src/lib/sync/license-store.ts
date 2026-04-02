@@ -246,6 +246,39 @@ export async function updateGroup(
   });
 }
 
+export async function deleteGroup(id: string): Promise<{ deleted: boolean; reason?: string }> {
+  return withMutex(async () => {
+    const store = await readStore();
+    if (!store.groups[id]) return { deleted: false, reason: "not_found" };
+
+    // Block if any license references this group
+    const assignedLicenses = Object.values(store.licenses).filter(
+      (l) => l.groupId === id,
+    );
+    if (assignedLicenses.length > 0) {
+      return {
+        deleted: false,
+        reason: `Grupa ma ${assignedLicenses.length} przypisanych licencji`,
+      };
+    }
+
+    // Block if any device references this group
+    const assignedDevices = Object.values(store.devices).filter(
+      (d) => d.groupId === id,
+    );
+    if (assignedDevices.length > 0) {
+      return {
+        deleted: false,
+        reason: `Grupa ma ${assignedDevices.length} przypisanych urzadzen`,
+      };
+    }
+
+    delete store.groups[id];
+    await writeStore(store);
+    return { deleted: true };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // License lookup by key
 // ---------------------------------------------------------------------------

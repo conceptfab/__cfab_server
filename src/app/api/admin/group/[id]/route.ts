@@ -2,9 +2,9 @@ export const runtime = "nodejs";
 
 import { badRequest } from "@/lib/http/error";
 import type { AdminGroupResponse } from "@/lib/sync/license-contracts";
-import { updateGroup } from "@/lib/sync/license-store";
+import { updateGroup, deleteGroup } from "@/lib/sync/license-store";
 import { validateUpdateGroupBody } from "@/lib/sync/license-validation";
-import { handleAdminOptions, handleAdminPatch } from "@/lib/sync/admin-http";
+import { handleAdminOptions, handleAdminPatch, handleAdminDelete } from "@/lib/sync/admin-http";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -25,3 +25,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     },
   );
 }
+
+export async function DELETE(request: Request, { params }: RouteParams) {
+  const { id } = await params;
+  return handleAdminDelete(request, "admin-group-delete", async () => {
+    const result = await deleteGroup(id);
+    if (!result.deleted) {
+      throw badRequest(result.reason ?? "Cannot delete group");
+    }
+    return { ok: true, deleted: true };
+  });
+}
+

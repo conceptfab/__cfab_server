@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 
-import { CreateLicenseForm } from "@/components/create-license-form";
+import { CreateLicenseForm, DeleteLicenseButton } from "@/components/create-license-form";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
@@ -247,8 +247,9 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
           {licenses.length}
         </span>
       </div>
+      <CreateLicenseForm groups={groups.map((g) => ({ id: g.id, name: g.name }))} />
       {licenses.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak licencji. Utworz pierwsza ponizej.</p>
+        <p className="mt-3 text-sm text-zinc-500">Brak licencji.</p>
       ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full text-left text-sm">
@@ -261,6 +262,7 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
                 <th className="px-3 py-2">Urzadzenia</th>
                 <th className="px-3 py-2">Grupa</th>
                 <th className="px-3 py-2">Wygasa</th>
+                <th className="px-3 py-2">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
@@ -282,6 +284,9 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
                     </td>
                     <td className="px-3 py-3 text-xs text-zinc-400">{groupName ?? lic.groupId.slice(0, 8)}</td>
                     <td className="px-3 py-3 text-zinc-300">{formatDate(lic.expiresAt)}</td>
+                    <td className="px-3 py-3">
+                      <DeleteLicenseButton licenseId={lic.id} />
+                    </td>
                   </tr>
                 );
               })}
@@ -289,7 +294,6 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
           </table>
         </div>
       )}
-      <CreateLicenseForm groups={groups.map((g) => ({ id: g.id, name: g.name }))} />
     </section>
   );
 }
