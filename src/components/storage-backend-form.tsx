@@ -27,7 +27,7 @@ export function CreateStorageBackendForm() {
 
     try {
       const body: Record<string, unknown> = { type, name, basePath };
-      if (type === "sftp") {
+      if (type === "sftp" || type === "ftp") {
         body.host = host;
         body.port = port;
         body.username = username;
