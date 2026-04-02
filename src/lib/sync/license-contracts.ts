@@ -140,6 +140,7 @@ export interface AdminCreateGroupBody {
 
 export interface AdminUpdateGroupBody {
   name?: string;
+  storageBackendId?: string;
   fixedMasterDeviceId?: string | null;
   maxSyncFrequencyHours?: number | null;
   maxDatabaseSizeMb?: number | null;

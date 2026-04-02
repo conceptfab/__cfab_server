@@ -71,26 +71,26 @@ export async function DELETE(request: Request, { params }: RouteParams) {
 
 export async function POST(request: Request, { params }: RouteParams) {
   const { id } = await params;
-  // POST to /admin/storage-backend/{id} = test connection
+  // POST to /admin/storage-backend/{id} = full test (upload + download + compare)
   return handleAdminPost(
     request,
     "admin-storage-backend-test",
     (body) => body, // no body needed
-    async (): Promise<AdminStorageBackendTestResponse> => {
+    async () => {
       const backend = await getStorageBackend(id);
       if (!backend) throw badRequest(`Storage backend not found: ${id}`);
 
-      try {
-        const adapter = createStorageAdapter(backend);
-        await adapter.healthCheck();
-        return { ok: true, reachable: true, error: null };
-      } catch (error) {
-        return {
-          ok: true,
-          reachable: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
+      const adapter = createStorageAdapter(backend);
+      const result = await adapter.fullTest();
+      return {
+        ok: true,
+        reachable: !result.error,
+        uploadOk: result.uploadOk,
+        downloadOk: result.downloadOk,
+        matchOk: result.matchOk,
+        latencyMs: result.latencyMs,
+        error: result.error,
+      };
     },
   );
 }

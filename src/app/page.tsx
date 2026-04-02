@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { CreateLicenseForm, DeleteLicenseButton } from "@/components/create-license-form";
+import { CreateStorageBackendForm, GroupBackendSelector, DeleteStorageBackendButton, TestStorageBackendButton } from "@/components/storage-backend-form";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
@@ -303,7 +304,7 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
 // ---------------------------------------------------------------------------
 
 function GroupsSection({ groups, storageBackends }: { groups: ClientGroup[]; storageBackends: StorageBackendConfig[] }) {
-  const backendMap = new Map(storageBackends.map((b) => [b.id, b]));
+  const backendOptions = storageBackends.map((b) => ({ id: b.id, name: `${b.name} (${b.type})` }));
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
@@ -329,28 +330,25 @@ function GroupsSection({ groups, storageBackends }: { groups: ClientGroup[]; sto
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
-              {groups.map((g) => {
-                const backend = backendMap.get(g.storageBackendId);
-                return (
-                  <tr key={g.id}>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{g.id.slice(0, 8)}</td>
-                    <td className="px-3 py-3 text-zinc-200">{g.name}</td>
-                    <td className="px-3 py-3 text-zinc-300">{g.ownerId}</td>
-                    <td className="px-3 py-3 text-zinc-300">
-                      {backend ? (
-                        <span className="font-mono text-xs">{backend.name} ({backend.type})</span>
-                      ) : (
-                        <span className="text-zinc-500 text-xs">domyslny (env)</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">
-                      {g.fixedMasterDeviceId ? g.fixedMasterDeviceId.slice(0, 10) : "\u2014"}
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">{g.maxSyncFrequencyHours ?? "\u2014"}</td>
-                    <td className="px-3 py-3 text-zinc-300">{g.maxDatabaseSizeMb ?? "\u2014"}</td>
-                  </tr>
-                );
-              })}
+              {groups.map((g) => (
+                <tr key={g.id}>
+                  <td className="px-3 py-3 font-mono text-xs text-zinc-200">{g.id.slice(0, 8)}</td>
+                  <td className="px-3 py-3 text-zinc-200">{g.name}</td>
+                  <td className="px-3 py-3 text-zinc-300">{g.ownerId}</td>
+                  <td className="px-3 py-3">
+                    <GroupBackendSelector
+                      groupId={g.id}
+                      currentBackendId={g.storageBackendId}
+                      backends={backendOptions}
+                    />
+                  </td>
+                  <td className="px-3 py-3 font-mono text-xs text-zinc-400">
+                    {g.fixedMasterDeviceId ? g.fixedMasterDeviceId.slice(0, 10) : "\u2014"}
+                  </td>
+                  <td className="px-3 py-3 text-zinc-300">{g.maxSyncFrequencyHours ?? "\u2014"}</td>
+                  <td className="px-3 py-3 text-zinc-300">{g.maxDatabaseSizeMb ?? "\u2014"}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -393,8 +391,10 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
         </div>
       </div>
 
+      <CreateStorageBackendForm />
+
       {storageBackends.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak dodatkowych backendow. Uzyj API POST /api/admin/storage-backend aby dodac.</p>
+        <p className="mt-3 text-sm text-zinc-500">Brak dodatkowych backendow.</p>
       ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full text-left text-sm">
@@ -408,6 +408,7 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
                 <th className="px-3 py-2">Max plik (MB)</th>
                 <th className="px-3 py-2">TTL sesji (min)</th>
                 <th className="px-3 py-2">Utworzony</th>
+                <th className="px-3 py-2">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
@@ -423,6 +424,12 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
                   <td className="px-3 py-3 text-zinc-300">{sb.maxFileSizeMb}</td>
                   <td className="px-3 py-3 text-zinc-300">{sb.sessionTtlMinutes}</td>
                   <td className="px-3 py-3 text-zinc-300">{formatDate(sb.createdAt)}</td>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <TestStorageBackendButton backendId={sb.id} />
+                      <DeleteStorageBackendButton backendId={sb.id} />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

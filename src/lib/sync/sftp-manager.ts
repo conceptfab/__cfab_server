@@ -23,8 +23,17 @@ export interface StorageAdapter {
   createSessionDir(sessionId: string): Promise<string>;
   deleteSessionDir(sessionId: string): Promise<void>;
   healthCheck(): Promise<void>;
+  fullTest(): Promise<StorageFullTestResult>;
   listSessionDirs(): Promise<string[]>;
   getConnectionInfo(sessionId: string): StorageConnectionInfo;
+}
+
+export interface StorageFullTestResult {
+  uploadOk: boolean;
+  downloadOk: boolean;
+  matchOk: boolean;
+  latencyMs: number;
+  error: string | null;
 }
 
 export interface StorageConnectionInfo {
@@ -94,6 +103,54 @@ function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
       });
     },
 
+    async fullTest(): Promise<{ uploadOk: boolean; downloadOk: boolean; matchOk: boolean; latencyMs: number; error: string | null }> {
+      const start = Date.now();
+      const testPayload = Buffer.from(`cfab-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const testDir = `${config.basePath}_fulltest_${Date.now()}`;
+      const testFile = `${testDir}/test.bin`;
+
+      try {
+        const result = await withSftp(async (sftp) => {
+          // 1. Create dir
+          await sftp.mkdir(testDir, true);
+
+          // 2. Upload
+          await sftp.put(testPayload, testFile);
+          const uploadOk = true;
+
+          // 3. Download
+          const downloaded = await sftp.get(testFile) as Buffer;
+          const downloadOk = true;
+
+          // 4. Compare
+          const matchOk = Buffer.isBuffer(downloaded) && downloaded.equals(testPayload);
+
+          // 5. Cleanup
+          await sftp.delete(testFile);
+          await sftp.rmdir(testDir);
+
+          return { uploadOk, downloadOk, matchOk, latencyMs: Date.now() - start, error: null };
+        });
+        return result;
+      } catch (error) {
+        // Try cleanup
+        try {
+          await withSftp(async (sftp) => {
+            const exists = await sftp.exists(testDir);
+            if (exists) await sftp.rmdir(testDir, true);
+          });
+        } catch { /* ignore cleanup errors */ }
+
+        return {
+          uploadOk: false,
+          downloadOk: false,
+          matchOk: false,
+          latencyMs: Date.now() - start,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
     async listSessionDirs(): Promise<string[]> {
       return withSftp(async (sftp) => {
         const exists = await sftp.exists(config.basePath);
@@ -130,6 +187,9 @@ function createS3Adapter(_config: S3StorageBackend): StorageAdapter {
       throw new Error("S3 storage backend is not yet implemented");
     },
     async healthCheck(): Promise<void> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async fullTest(): Promise<StorageFullTestResult> {
       throw new Error("S3 storage backend is not yet implemented");
     },
     async listSessionDirs(): Promise<string[]> {
