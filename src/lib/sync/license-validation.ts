@@ -4,14 +4,18 @@ import { badRequest } from "@/lib/http/error";
 import type {
   AdminCreateGroupBody,
   AdminCreateLicenseBody,
+  AdminCreateStorageBackendBody,
   AdminUpdateGroupBody,
   AdminUpdateLicenseBody,
+  AdminUpdateStorageBackendBody,
   LicensePlan,
   LicenseStatus,
+  StorageBackendType,
 } from "./license-contracts";
 
 const VALID_PLANS: LicensePlan[] = ["free", "starter", "pro", "enterprise"];
 const VALID_STATUSES: LicenseStatus[] = ["active", "trial", "expired", "suspended", "revoked"];
+const VALID_BACKEND_TYPES: StorageBackendType[] = ["sftp", "aws-s3"];
 
 function assertObject(body: unknown): asserts body is Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -113,5 +117,59 @@ export function validateUpdateGroupBody(body: unknown): AdminUpdateGroupBody {
     fixedMasterDeviceId: body.fixedMasterDeviceId === null ? null : optionalString(body.fixedMasterDeviceId),
     maxSyncFrequencyHours: optionalNullableNumber(body.maxSyncFrequencyHours, "maxSyncFrequencyHours"),
     maxDatabaseSizeMb: optionalNullableNumber(body.maxDatabaseSizeMb, "maxDatabaseSizeMb"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Storage backend validation
+// ---------------------------------------------------------------------------
+
+export function validateCreateStorageBackendBody(body: unknown): AdminCreateStorageBackendBody {
+  assertObject(body);
+  const type = requireString(body.type, "type");
+  if (!VALID_BACKEND_TYPES.includes(type as StorageBackendType)) {
+    throw badRequest(`type must be one of: ${VALID_BACKEND_TYPES.join(", ")}`);
+  }
+
+  const base: AdminCreateStorageBackendBody = {
+    type: type as StorageBackendType,
+    name: requireString(body.name, "name"),
+    basePath: requireString(body.basePath, "basePath"),
+    maxFileSizeMb: optionalPositiveInt(body.maxFileSizeMb, "maxFileSizeMb"),
+    sessionTtlMinutes: optionalPositiveInt(body.sessionTtlMinutes, "sessionTtlMinutes"),
+  };
+
+  if (type === "sftp") {
+    base.host = requireString(body.host, "host");
+    base.port = optionalPositiveInt(body.port, "port");
+    base.username = requireString(body.username, "username");
+    base.password = requireString(body.password, "password");
+  } else if (type === "aws-s3") {
+    base.region = requireString(body.region, "region");
+    base.bucket = requireString(body.bucket, "bucket");
+    base.accessKeyId = requireString(body.accessKeyId, "accessKeyId");
+    base.secretAccessKey = requireString(body.secretAccessKey, "secretAccessKey");
+    base.usePresignedUrls = typeof body.usePresignedUrls === "boolean" ? body.usePresignedUrls : false;
+  }
+
+  return base;
+}
+
+export function validateUpdateStorageBackendBody(body: unknown): AdminUpdateStorageBackendBody {
+  assertObject(body);
+  return {
+    name: optionalString(body.name),
+    basePath: optionalString(body.basePath),
+    maxFileSizeMb: optionalPositiveInt(body.maxFileSizeMb, "maxFileSizeMb"),
+    sessionTtlMinutes: optionalPositiveInt(body.sessionTtlMinutes, "sessionTtlMinutes"),
+    host: optionalString(body.host),
+    port: optionalPositiveInt(body.port, "port"),
+    username: optionalString(body.username),
+    password: optionalString(body.password),
+    region: optionalString(body.region),
+    bucket: optionalString(body.bucket),
+    accessKeyId: optionalString(body.accessKeyId),
+    secretAccessKey: optionalString(body.secretAccessKey),
+    usePresignedUrls: typeof body.usePresignedUrls === "boolean" ? body.usePresignedUrls : undefined,
   };
 }

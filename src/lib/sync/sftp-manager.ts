@@ -1,6 +1,11 @@
 import SftpClient from "ssh2-sftp-client";
 import { getEnv } from "@/lib/config/env";
 import { log } from "@/lib/observability/logger";
+import type {
+  StorageBackendConfig,
+  SftpStorageBackend,
+  S3StorageBackend,
+} from "@/lib/sync/license-contracts";
 
 // --- Types ---
 
@@ -12,69 +17,188 @@ export interface SftpHealthStatus {
   error: string | null;
 }
 
-// --- Connection helper ---
+// --- Storage adapter interface ---
 
-async function withSftp<T>(fn: (sftp: SftpClient) => Promise<T>): Promise<T> {
-  const env = getEnv();
-  if (!env.sftpHost || !env.sftpUser || !env.sftpPassword) {
-    throw new Error(
-      "SFTP not configured: missing SFTP_HOST, SFTP_USER, or SFTP_PASSWORD",
-    );
+export interface StorageAdapter {
+  createSessionDir(sessionId: string): Promise<string>;
+  deleteSessionDir(sessionId: string): Promise<void>;
+  healthCheck(): Promise<void>;
+  listSessionDirs(): Promise<string[]>;
+  getConnectionInfo(sessionId: string): StorageConnectionInfo;
+}
+
+export interface StorageConnectionInfo {
+  protocol: "sftp" | "s3";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  basePath: string;
+  uploadPath: string;
+  downloadPath: string;
+}
+
+// --- SFTP adapter ---
+
+function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
+  async function withSftp<T>(fn: (sftp: SftpClient) => Promise<T>): Promise<T> {
+    const sftp = new SftpClient();
+    try {
+      await sftp.connect({
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+      });
+      return await fn(sftp);
+    } finally {
+      await sftp.end();
+    }
   }
-  const sftp = new SftpClient();
-  try {
-    await sftp.connect({
-      host: env.sftpHost,
-      port: env.sftpPort,
-      username: env.sftpUser,
-      password: env.sftpPassword,
-    });
-    return await fn(sftp);
-  } finally {
-    await sftp.end();
+
+  return {
+    async createSessionDir(sessionId: string): Promise<string> {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      await withSftp(async (sftp) => {
+        await sftp.mkdir(`${sessionPath}/slave-upload`, true);
+        await sftp.mkdir(`${sessionPath}/master-merged`, true);
+      });
+      log("info", "sftp.session-dir.created", { sessionId, path: sessionPath, backendId: config.id });
+      return sessionPath;
+    },
+
+    async deleteSessionDir(sessionId: string): Promise<void> {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      try {
+        await withSftp(async (sftp) => {
+          const exists = await sftp.exists(sessionPath);
+          if (exists) {
+            await sftp.rmdir(sessionPath, true);
+          }
+        });
+        log("info", "sftp.session-dir.deleted", { sessionId, backendId: config.id });
+      } catch (error) {
+        log("error", "sftp.session-dir.delete-failed", {
+          sessionId,
+          backendId: config.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    async healthCheck(): Promise<void> {
+      await withSftp(async (sftp) => {
+        const testDir = `${config.basePath}_health_check_${Date.now()}`;
+        await sftp.mkdir(testDir, true);
+        await sftp.rmdir(testDir);
+      });
+    },
+
+    async listSessionDirs(): Promise<string[]> {
+      return withSftp(async (sftp) => {
+        const exists = await sftp.exists(config.basePath);
+        if (!exists) return [];
+        const list = await sftp.list(config.basePath);
+        return list.filter((item) => item.type === "d").map((item) => item.name);
+      });
+    },
+
+    getConnectionInfo(sessionId: string): StorageConnectionInfo {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      return {
+        protocol: "sftp",
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        basePath: config.basePath,
+        uploadPath: `${sessionPath}/slave-upload/`,
+        downloadPath: `${sessionPath}/master-merged/`,
+      };
+    },
+  };
+}
+
+// --- S3 adapter (placeholder for future implementation) ---
+
+function createS3Adapter(_config: S3StorageBackend): StorageAdapter {
+  return {
+    async createSessionDir(_sessionId: string): Promise<string> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async deleteSessionDir(_sessionId: string): Promise<void> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async healthCheck(): Promise<void> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async listSessionDirs(): Promise<string[]> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    getConnectionInfo(_sessionId: string): StorageConnectionInfo {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+  };
+}
+
+// --- Factory ---
+
+export function createStorageAdapter(config: StorageBackendConfig): StorageAdapter {
+  switch (config.type) {
+    case "sftp":
+      return createSftpAdapter(config);
+    case "aws-s3":
+      return createS3Adapter(config);
+    default:
+      throw new Error(`Unknown storage backend type: ${(config as any).type}`);
   }
 }
 
-// --- Directory operations ---
+// --- Global SFTP fallback (uses env vars) ---
+
+function getGlobalSftpConfig(): SftpStorageBackend | null {
+  const env = getEnv();
+  if (!env.sftpHost || !env.sftpUser || !env.sftpPassword) return null;
+  return {
+    id: "global",
+    type: "sftp",
+    name: "Global SFTP (env)",
+    basePath: env.sftpBasePath,
+    maxFileSizeMb: env.sftpMaxFileSizeMb,
+    sessionTtlMinutes: 60,
+    createdAt: "",
+    host: env.sftpHost,
+    port: env.sftpPort,
+    username: env.sftpUser,
+    password: env.sftpPassword,
+  };
+}
+
+export function getGlobalStorageAdapter(): StorageAdapter | null {
+  const config = getGlobalSftpConfig();
+  if (!config) return null;
+  return createSftpAdapter(config);
+}
+
+// --- Legacy functions (delegate to global adapter) ---
 
 export async function createSessionDir(sessionId: string): Promise<string> {
-  const env = getEnv();
-  const sessionPath = `${env.sftpBasePath}${sessionId}`;
-
-  await withSftp(async (sftp) => {
-    await sftp.mkdir(`${sessionPath}/slave-upload`, true);
-    await sftp.mkdir(`${sessionPath}/master-merged`, true);
-  });
-
-  log("info", "sftp.session-dir.created", { sessionId, path: sessionPath });
-  return sessionPath;
+  const adapter = getGlobalStorageAdapter();
+  if (!adapter) throw new Error("SFTP not configured: missing SFTP_HOST, SFTP_USER, or SFTP_PASSWORD");
+  return adapter.createSessionDir(sessionId);
 }
 
 export async function deleteSessionDir(sessionId: string): Promise<void> {
-  const env = getEnv();
-  const sessionPath = `${env.sftpBasePath}${sessionId}`;
-
-  try {
-    await withSftp(async (sftp) => {
-      const exists = await sftp.exists(sessionPath);
-      if (exists) {
-        await sftp.rmdir(sessionPath, true);
-      }
-    });
-    log("info", "sftp.session-dir.deleted", { sessionId });
-  } catch (error) {
-    log("error", "sftp.session-dir.delete-failed", {
-      sessionId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
+  const adapter = getGlobalStorageAdapter();
+  if (!adapter) return;
+  return adapter.deleteSessionDir(sessionId);
 }
 
 export async function healthCheck(): Promise<SftpHealthStatus> {
   const now = new Date().toISOString();
-  const env = getEnv();
+  const adapter = getGlobalStorageAdapter();
 
-  if (!env.sftpHost || !env.sftpUser || !env.sftpPassword) {
+  if (!adapter) {
     return {
       available: false,
       lastCheckAt: now,
@@ -85,25 +209,14 @@ export async function healthCheck(): Promise<SftpHealthStatus> {
   }
 
   try {
-    return await withSftp(async (sftp) => {
-      const basePath = env.sftpBasePath;
-      let dirs: string[] = [];
-      const exists = await sftp.exists(basePath);
-      if (exists) {
-        const list = await sftp.list(basePath);
-        dirs = list
-          .filter((item) => item.type === "d")
-          .map((item) => item.name);
-      }
-
-      return {
-        available: true,
-        lastCheckAt: now,
-        activeSessions: dirs.length,
-        orphanedDirs: 0, // Will be calculated by caller with session store context
-        error: null,
-      };
-    });
+    const dirs = await adapter.listSessionDirs();
+    return {
+      available: true,
+      lastCheckAt: now,
+      activeSessions: dirs.length,
+      orphanedDirs: 0,
+      error: null,
+    };
   } catch (error) {
     return {
       available: false,
@@ -116,13 +229,7 @@ export async function healthCheck(): Promise<SftpHealthStatus> {
 }
 
 export async function listSessionDirs(): Promise<string[]> {
-  const env = getEnv();
-
-  return withSftp(async (sftp) => {
-    const basePath = env.sftpBasePath;
-    const exists = await sftp.exists(basePath);
-    if (!exists) return [];
-    const list = await sftp.list(basePath);
-    return list.filter((item) => item.type === "d").map((item) => item.name);
-  });
+  const adapter = getGlobalStorageAdapter();
+  if (!adapter) return [];
+  return adapter.listSessionDirs();
 }

@@ -13,21 +13,57 @@ import type {
 import type { SftpConnectionInfo } from "./storage-encryption";
 import { resolveRole } from "@/lib/sync/session-roles";
 import {
-  cancelSession,
   findAndJoinOrCreate,
-  getSession,
-  heartbeat,
-  reportStep,
+  stepToPhase,
   updateSessionStorage,
+  withValidatedSession,
 } from "@/lib/sync/session-store";
-import { createSessionDir } from "./sftp-manager";
+import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
+import type { StorageAdapter } from "./sftp-manager";
 import { encryptCredentialsWithFileKey } from "./storage-encryption";
 import { getEnv } from "@/lib/config/env";
+import { getStorageBackend, getAllGroups, getAllLicenses } from "./license-store";
+import type { ClientGroup, DeviceRegistration, License } from "./license-contracts";
+import { validateLicenseForSync } from "./license-middleware";
 import { log } from "@/lib/observability/logger";
+
+interface UserLicenseContext {
+  license: License;
+  group: ClientGroup;
+  device: DeviceRegistration | null;
+}
+
+async function resolveLicenseContext(userId: string, deviceId: string): Promise<UserLicenseContext | null> {
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.ownerId === userId);
+  if (!group) return null;
+
+  const licenses = await getAllLicenses();
+  const license = licenses.find((l) => l.id === group.licenseId);
+  if (!license) return null;
+
+  // Device may not be registered yet (first sync)
+  const device: DeviceRegistration | null = null; // Looked up from store if needed
+  return { license, group, device };
+}
+
+async function resolveStorageBackendForUser(userId: string): Promise<string | null> {
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.ownerId === userId);
+  if (!group || !group.storageBackendId || group.storageBackendId === "default") {
+    return null;
+  }
+  return group.storageBackendId;
+}
 
 // ---------------------------------------------------------------------------
 // Next-action resolution
 // ---------------------------------------------------------------------------
+
+/** Step boundaries for sync phases */
+const PHASE_SETUP_END = 5;
+const PHASE_TRANSFER_END = 8;
+const PHASE_FINALIZE_END = 11;
 
 function determineNextAction(
   session: SyncSession,
@@ -49,36 +85,16 @@ function determineNextAction(
   }
 
   // in_progress
-  if (currentStep < 5) {
+  if (currentStep < PHASE_SETUP_END) {
     return role === "master" ? "upload_data" : "wait_for_upload";
   }
-  if (currentStep < 8) {
+  if (currentStep < PHASE_TRANSFER_END) {
     return role === "master" ? "merge_data" : "wait_for_merge";
   }
-  if (currentStep < 11) {
+  if (currentStep < PHASE_FINALIZE_END) {
     return role === "slave" ? "download_result" : "wait_for_download";
   }
   return "confirm_completion";
-}
-
-// ---------------------------------------------------------------------------
-// Ownership validation helper
-// ---------------------------------------------------------------------------
-
-function validateOwnership(
-  session: SyncSession,
-  userId: string,
-  deviceId: string,
-): void {
-  if (session.userId !== userId) {
-    throw new Error("Session does not belong to this user");
-  }
-  if (
-    session.masterDeviceId !== deviceId &&
-    session.slaveDeviceId !== deviceId
-  ) {
-    throw new Error("Device is not part of this session");
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +105,25 @@ export async function handleSessionCreate(
   userId: string,
   body: SessionCreateBody,
 ): Promise<SessionCreateResponse> {
+  // License enforcement: if user has a license context, validate it
+  const licenseCtx = await resolveLicenseContext(userId, body.deviceId);
+  if (licenseCtx) {
+    const { license, group } = licenseCtx;
+    // Build a minimal device registration for validation
+    const deviceReg: DeviceRegistration = licenseCtx.device ?? {
+      deviceId: body.deviceId,
+      groupId: group.id,
+      licenseId: license.id,
+      deviceName: body.deviceId,
+      registeredAt: new Date().toISOString(),
+      lastSeenAt: new Date().toISOString(),
+      lastSyncAt: null,
+      lastMarkerHash: null,
+      isFixedMaster: group.fixedMasterDeviceId === body.deviceId,
+    };
+    validateLicenseForSync(license, group, deviceReg, body.deviceId);
+  }
+
   // C1: Atomic find-and-join-or-create to prevent race condition in session pairing
   const { session, role } = await findAndJoinOrCreate(
     userId,
@@ -98,30 +133,55 @@ export async function handleSessionCreate(
   );
 
   if (role === "slave") {
-    // Provision SFTP storage when session transitions to "negotiating"
+    // Provision storage when session transitions to "negotiating"
     try {
       const env = getEnv();
-      if (env.sftpHost && env.sftpUser && env.sftpPassword && env.syncEncryptionKey) {
-        const sessionPath = await createSessionDir(session.id);
+      if (env.syncEncryptionKey) {
+        // Resolve storage adapter: group backend → global fallback
+        let adapter: StorageAdapter | null = null;
+        let backendId = "global";
 
-        const connection: SftpConnectionInfo = {
-          host: env.sftpHost,
-          port: env.sftpPort,
-          protocol: "sftp",
-          username: env.sftpUser,
-          password: env.sftpPassword,
-          uploadPath: `${sessionPath}/slave-upload/`,
-          downloadPath: `${sessionPath}/master-merged/`,
-        };
+        const groupBackendId = await resolveStorageBackendForUser(userId);
+        if (groupBackendId) {
+          const backendConfig = await getStorageBackend(groupBackendId);
+          if (backendConfig) {
+            adapter = createStorageAdapter(backendConfig);
+            backendId = backendConfig.id;
+          }
+        }
 
-        const encrypted = encryptCredentialsWithFileKey(connection, session.id);
+        if (!adapter) {
+          adapter = getGlobalStorageAdapter();
+        }
 
-        await updateSessionStorage(session.id, sessionPath, {
-          encrypted,
-        });
+        if (adapter) {
+          const sessionPath = await adapter.createSessionDir(session.id);
+          const connInfo = adapter.getConnectionInfo(session.id);
+
+          const connection: SftpConnectionInfo = {
+            host: connInfo.host,
+            port: connInfo.port,
+            protocol: "sftp",
+            username: connInfo.username,
+            password: connInfo.password,
+            uploadPath: connInfo.uploadPath,
+            downloadPath: connInfo.downloadPath,
+          };
+
+          const encrypted = encryptCredentialsWithFileKey(connection, session.id);
+
+          await updateSessionStorage(session.id, sessionPath, {
+            encrypted,
+          });
+
+          log("info", "session-service.storage-provisioned", {
+            sessionId: session.id,
+            backendId,
+          });
+        }
       }
     } catch (error) {
-      log("warn", "session-service.sftp-provision-failed", {
+      log("warn", "session-service.storage-provision-failed", {
         sessionId: session.id,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -154,15 +214,10 @@ export async function handleSessionStatus(
   sessionId: string,
   deviceId: string,
 ): Promise<SessionStatusResponse> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  if (session.userId !== userId) {
-    throw new Error("Session does not belong to this user");
-  }
-  // C3: Validate that the requesting device is a participant in this session
-  if (session.masterDeviceId !== deviceId && session.slaveDeviceId !== deviceId) {
-    throw new Error("Device not participant in this session");
-  }
+  // C2: Atomic validate-ownership + read status in a single mutex lock
+  const session = await withValidatedSession(sessionId, userId, deviceId, () => {
+    // no mutations needed — just validate and return
+  });
 
   const role = resolveRole(session.masterDeviceId, deviceId);
   const peerDeviceId =
@@ -190,18 +245,41 @@ export async function handleSessionReport(
   sessionId: string,
   body: SessionReportBody,
 ): Promise<SessionReportResponse> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  validateOwnership(session, userId, body.deviceId);
+  // C2: Atomic validate-ownership + report-step in a single mutex lock
+  const updated = await withValidatedSession(sessionId, userId, body.deviceId, (session) => {
+    const TERMINAL = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL.includes(session.status)) return;
+    if (body.step < 1 || body.step > 13) return;
 
-  const updated = await reportStep(
-    sessionId,
-    body.step,
-    body.action,
-    body.deviceId,
-    body.details,
-    body.status,
-  );
+    session.stepLog.push({
+      step: body.step,
+      phase: stepToPhase(body.step),
+      action: body.action,
+      deviceId: body.deviceId,
+      timestamp: new Date().toISOString(),
+      details: body.details,
+      status: body.status,
+    });
+    if (body.step > session.currentStep) session.currentStep = body.step;
+    session.updatedAt = new Date().toISOString();
+
+    if (body.status === "error") {
+      session.status = "failed";
+      session.errorMessage = (body.details.error as string) ?? body.action;
+    }
+    if (body.step >= 13 && body.status === "ok") {
+      const devicesAtStep13 = new Set(
+        session.stepLog.filter((l) => l.step >= 13 && l.status === "ok").map((l) => l.deviceId),
+      );
+      if (devicesAtStep13.has(session.masterDeviceId) && session.slaveDeviceId && devicesAtStep13.has(session.slaveDeviceId)) {
+        session.status = "completed";
+        session.completedAt = new Date().toISOString();
+      }
+    }
+    if (session.status === "negotiating" && body.step > 0 && body.status === "ok") {
+      session.status = "in_progress";
+    }
+  });
 
   return {
     ok: true,
@@ -216,11 +294,18 @@ export async function handleSessionHeartbeat(
   sessionId: string,
   body: SessionHeartbeatBody,
 ): Promise<SessionHeartbeatResponse> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  validateOwnership(session, userId, body.deviceId);
+  // C2: Atomic validate-ownership + heartbeat in a single mutex lock
+  const updated = await withValidatedSession(sessionId, userId, body.deviceId, (session) => {
+    const TERMINAL = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL.includes(session.status)) return;
 
-  const updated = await heartbeat(sessionId, body.deviceId);
+    const HEARTBEAT_SLIDE_MS = 2 * 60 * 1000;
+    const newExpiry = new Date(Date.now() + HEARTBEAT_SLIDE_MS).toISOString();
+    if (new Date(newExpiry).getTime() > new Date(session.expiresAt).getTime()) {
+      session.expiresAt = newExpiry;
+    }
+    session.updatedAt = new Date().toISOString();
+  });
 
   return {
     ok: true,
@@ -234,11 +319,17 @@ export async function handleSessionCancel(
   sessionId: string,
   body: SessionCancelBody,
 ): Promise<SessionCancelResponse> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  validateOwnership(session, userId, body.deviceId);
+  // C2: Atomic validate-ownership + cancel in a single mutex lock
+  const updated = await withValidatedSession(sessionId, userId, body.deviceId, (session) => {
+    const TERMINAL = ["completed", "failed", "expired", "cancelled"];
+    if (TERMINAL.includes(session.status)) return;
 
-  const updated = await cancelSession(sessionId, body.deviceId, body.reason);
+    session.status = "cancelled";
+    session.updatedAt = new Date().toISOString();
+    if (body.reason) {
+      session.errorMessage = body.reason;
+    }
+  });
 
   return {
     ok: true,

@@ -59,9 +59,103 @@ export interface SyncSession {
   errorMessage: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Sync history
+// ---------------------------------------------------------------------------
+
+export interface SyncHistoryEntry {
+  id: string;
+  sessionId: string;
+  masterDeviceId: string;
+  slaveDeviceId: string | null;
+  syncMode: SyncMode | null;
+  resultMarkerHash: string | null;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  status: "completed" | "failed";
+  errorMessage: string | null;
+  stepCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Async delta packages (store-and-forward)
+// ---------------------------------------------------------------------------
+
+export type AsyncPackageStatus =
+  | "pending"       // uploaded, waiting for peer to pull
+  | "delivered"     // peer downloaded + acked
+  | "rejected"      // peer rejected (base marker mismatch)
+  | "expired";      // TTL exceeded
+
+export interface AsyncDeltaPackage {
+  id: string;
+  groupId: string;
+  fromDeviceId: string;
+  toGroupDevices: boolean;           // true = any device in group can pull
+  baseMarkerHash: string | null;
+  newMarkerHash: string;
+  storagePath: string;               // path on storage backend
+  storageBackendId: string | null;   // null = global env backend
+  status: AsyncPackageStatus;
+  fileSizeBytes: number;
+  createdAt: string;
+  expiresAt: string;
+  deliveredAt: string | null;
+  deliveredToDeviceId: string | null;
+}
+
+export interface AsyncPushBody {
+  deviceId: string;
+  groupId: string;
+  baseMarkerHash: string | null;
+  newMarkerHash: string;
+  fileSizeBytes: number;
+}
+
+export interface AsyncPushResponse {
+  ok: true;
+  packageId: string;
+  storagePath: string;
+  storageCredentials: StorageCredentials | null;
+  expiresAt: string;
+}
+
+export interface AsyncPendingResponse {
+  ok: true;
+  packages: AsyncDeltaPackage[];
+}
+
+export interface AsyncAckBody {
+  deviceId: string;
+  packageId: string;
+}
+
+export interface AsyncAckResponse {
+  ok: true;
+  acknowledged: boolean;
+}
+
+export interface AsyncRejectBody {
+  deviceId: string;
+  packageId: string;
+  reason?: string;
+}
+
+export interface AsyncRejectResponse {
+  ok: true;
+  rejected: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Store file
+// ---------------------------------------------------------------------------
+
 export interface SessionStoreFile {
   version: 1;
   sessions: Record<string, SyncSession>;
+  asyncPackages?: Record<string, AsyncDeltaPackage>;
+  syncHistory?: SyncHistoryEntry[];
 }
 
 // ---------------------------------------------------------------------------

@@ -9,15 +9,15 @@ import { REQUEST_ID_HEADER, getOrCreateRequestId } from "@/lib/observability/req
 import { checkRateLimit } from "@/lib/security/rate-limit";
 
 type SyncRouteName =
-  | "status"
-  | "push"
-  | "pull"
-  | "ack"
   | "session-create"
   | "session-status"
   | "session-report"
   | "session-heartbeat"
-  | "session-cancel";
+  | "session-cancel"
+  | "async-push"
+  | "async-pending"
+  | "async-ack"
+  | "async-reject";
 
 export async function validateTokenSyncAuth(request: Request): Promise<string | null> {
     const authHeader = request.headers.get("authorization");

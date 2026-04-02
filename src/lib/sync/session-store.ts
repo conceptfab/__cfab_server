@@ -4,8 +4,10 @@ import path from "node:path";
 
 import type { TableHashes } from "@/lib/sync/contracts";
 import type {
+  AsyncDeltaPackage,
   SessionStoreFile,
   StorageCredentials,
+  SyncHistoryEntry,
   SyncSession,
   SyncSessionStatus,
   SyncStepLog,
@@ -17,6 +19,7 @@ const STORE_FILE = path.join(DATA_DIR, "session-store.json");
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const HEARTBEAT_SLIDE_MS = 2 * 60 * 1000; // 2 minutes
+const TERMINAL_STATES: SyncSessionStatus[] = ["completed", "failed", "expired", "cancelled"];
 
 // ---------------------------------------------------------------------------
 // Phase mapping
@@ -39,7 +42,7 @@ function nowIso(): string {
 }
 
 function emptyStore(): SessionStoreFile {
-  return { version: 1, sessions: {} };
+  return { version: 1, sessions: {}, asyncPackages: {}, syncHistory: [] };
 }
 
 async function ensureDataDir(): Promise<void> {
@@ -56,7 +59,15 @@ async function readStore(): Promise<SessionStoreFile> {
       "version" in parsed &&
       "sessions" in parsed
     ) {
-      return parsed as SessionStoreFile;
+      const store = parsed as SessionStoreFile;
+      // Backfill for older store files
+      if (!store.asyncPackages) {
+        store.asyncPackages = {};
+      }
+      if (!store.syncHistory) {
+        store.syncHistory = [];
+      }
+      return store;
     }
     return emptyStore();
   } catch (error: unknown) {
@@ -317,7 +328,6 @@ export async function reportStep(
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
     // C2: Ignore reports to terminal sessions
-    const TERMINAL_STATES = ["completed", "failed", "expired", "cancelled"];
     if (TERMINAL_STATES.includes(session.status)) {
       return session;
     }
@@ -347,6 +357,24 @@ export async function reportStep(
     if (status === "error") {
       session.status = "failed";
       session.errorMessage = details.error as string ?? action;
+
+      // Record failed session in history
+      const startTime = new Date(session.createdAt).getTime();
+      const historyEntry: SyncHistoryEntry = {
+        id: randomUUID(),
+        sessionId: session.id,
+        masterDeviceId: session.masterDeviceId,
+        slaveDeviceId: session.slaveDeviceId,
+        syncMode: session.syncMode,
+        resultMarkerHash: null,
+        startedAt: session.createdAt,
+        completedAt: nowIso(),
+        durationMs: Date.now() - startTime,
+        status: "failed",
+        errorMessage: session.errorMessage,
+        stepCount: session.stepLog.length,
+      };
+      store.syncHistory!.push(historyEntry);
     }
 
     // Completion detection: both devices reported step 13
@@ -364,6 +392,25 @@ export async function reportStep(
       if (masterReported && slaveReported) {
         session.status = "completed";
         session.completedAt = nowIso();
+
+        // Record sync history entry
+        const startTime = new Date(session.createdAt).getTime();
+        const endTime = Date.now();
+        const historyEntry: SyncHistoryEntry = {
+          id: randomUUID(),
+          sessionId: session.id,
+          masterDeviceId: session.masterDeviceId,
+          slaveDeviceId: session.slaveDeviceId,
+          syncMode: session.syncMode,
+          resultMarkerHash: session.resultMarkerHash,
+          startedAt: session.createdAt,
+          completedAt: session.completedAt!,
+          durationMs: endTime - startTime,
+          status: "completed",
+          errorMessage: null,
+          stepCount: session.stepLog.length,
+        };
+        store.syncHistory!.push(historyEntry);
       }
     }
 
@@ -387,14 +434,13 @@ export async function heartbeat(
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
     // C2: Ignore heartbeats to terminal sessions
-    const TERMINAL_STATES_HB = ["completed", "failed", "expired", "cancelled"];
-    if (TERMINAL_STATES_HB.includes(session.status)) {
+    if (TERMINAL_STATES.includes(session.status)) {
       return session;
     }
 
     // I3: Only extend TTL, never reduce it
     const newExpiry = new Date(Date.now() + HEARTBEAT_SLIDE_MS).toISOString();
-    if (newExpiry > session.expiresAt) {
+    if (new Date(newExpiry).getTime() > new Date(session.expiresAt).getTime()) {
       session.expiresAt = newExpiry;
     }
     session.updatedAt = nowIso();
@@ -415,8 +461,7 @@ export async function cancelSession(
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
     // C2: Ignore cancellation of terminal sessions
-    const TERMINAL_STATES_CS = ["completed", "failed", "expired", "cancelled"];
-    if (TERMINAL_STATES_CS.includes(session.status)) {
+    if (TERMINAL_STATES.includes(session.status)) {
       return session;
     }
 
@@ -487,6 +532,37 @@ export async function cleanupOldSessions(maxAgeMs: number): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// Atomic get + validate ownership + action
+// ---------------------------------------------------------------------------
+
+/**
+ * Atomically: read store → validate session ownership → perform action → write store.
+ * The action callback receives the validated session and must mutate it in place.
+ * The store is written back after the action completes.
+ */
+export async function withValidatedSession(
+  sessionId: string,
+  userId: string,
+  deviceId: string,
+  action: (session: SyncSession) => void,
+): Promise<SyncSession> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const session = store.sessions[sessionId];
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (session.userId !== userId) {
+      throw new Error("Session does not belong to this user");
+    }
+    if (session.masterDeviceId !== deviceId && session.slaveDeviceId !== deviceId) {
+      throw new Error("Device is not part of this session");
+    }
+    action(session);
+    await writeStore(store);
+    return session;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Storage helpers
 // ---------------------------------------------------------------------------
 
@@ -526,5 +602,177 @@ export async function getActiveSessionIds(): Promise<string[]> {
     return Object.values(store.sessions)
       .filter((s) => !terminal.includes(s.status))
       .map((s) => s.id);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Async delta packages
+// ---------------------------------------------------------------------------
+
+export async function createAsyncPackage(
+  pkg: AsyncDeltaPackage,
+): Promise<void> {
+  return withMutex(async () => {
+    const store = await readStore();
+    store.asyncPackages![pkg.id] = pkg;
+    await writeStore(store);
+  });
+}
+
+export async function getAsyncPackage(
+  packageId: string,
+): Promise<AsyncDeltaPackage | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return store.asyncPackages?.[packageId] ?? null;
+  });
+}
+
+export async function getAllAsyncPackages(): Promise<AsyncDeltaPackage[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.asyncPackages ?? {});
+  });
+}
+
+export async function getPendingPackagesForGroup(
+  groupId: string,
+  excludeDeviceId: string,
+): Promise<AsyncDeltaPackage[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const now = Date.now();
+    return Object.values(store.asyncPackages ?? {}).filter(
+      (p) =>
+        p.groupId === groupId &&
+        p.status === "pending" &&
+        p.fromDeviceId !== excludeDeviceId &&
+        new Date(p.expiresAt).getTime() > now,
+    );
+  });
+}
+
+export async function updateAsyncPackageStatus(
+  packageId: string,
+  status: AsyncDeltaPackage["status"],
+  extra?: { deliveredToDeviceId?: string },
+): Promise<AsyncDeltaPackage | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const pkg = store.asyncPackages?.[packageId];
+    if (!pkg) return null;
+    pkg.status = status;
+    if (status === "delivered") {
+      pkg.deliveredAt = nowIso();
+      if (extra?.deliveredToDeviceId) {
+        pkg.deliveredToDeviceId = extra.deliveredToDeviceId;
+      }
+    }
+    await writeStore(store);
+    return pkg;
+  });
+}
+
+export async function expireAsyncPackages(): Promise<number> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const now = Date.now();
+    let count = 0;
+    for (const pkg of Object.values(store.asyncPackages ?? {})) {
+      if (
+        pkg.status === "pending" &&
+        new Date(pkg.expiresAt).getTime() <= now
+      ) {
+        pkg.status = "expired";
+        count++;
+      }
+    }
+    if (count > 0) await writeStore(store);
+    return count;
+  });
+}
+
+export async function cleanupOldAsyncPackages(maxAgeMs: number): Promise<number> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const cutoff = Date.now() - maxAgeMs;
+    const terminal: AsyncDeltaPackage["status"][] = ["delivered", "rejected", "expired"];
+    let count = 0;
+    for (const [id, pkg] of Object.entries(store.asyncPackages ?? {})) {
+      if (
+        terminal.includes(pkg.status) &&
+        new Date(pkg.createdAt).getTime() < cutoff
+      ) {
+        delete store.asyncPackages![id];
+        count++;
+      }
+    }
+    if (count > 0) await writeStore(store);
+    return count;
+  });
+}
+
+/** Get expired/delivered/rejected async packages that still have storage paths */
+export async function getCleanableAsyncPackageIds(): Promise<{ id: string; storagePath: string }[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const terminal: AsyncDeltaPackage["status"][] = ["delivered", "rejected", "expired"];
+    return Object.values(store.asyncPackages ?? {})
+      .filter((p) => terminal.includes(p.status) && p.storagePath)
+      .map((p) => ({ id: p.id, storagePath: p.storagePath }));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sync history
+// ---------------------------------------------------------------------------
+
+export async function getSyncHistory(
+  limit = 50,
+  offset = 0,
+): Promise<{ entries: SyncHistoryEntry[]; total: number }> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const history = store.syncHistory ?? [];
+    // Sort newest first
+    const sorted = [...history].sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+    return {
+      entries: sorted.slice(offset, offset + limit),
+      total: sorted.length,
+    };
+  });
+}
+
+export async function getSyncHistoryEntry(
+  entryId: string,
+): Promise<SyncHistoryEntry | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return (store.syncHistory ?? []).find((e) => e.id === entryId) ?? null;
+  });
+}
+
+export async function getSyncHistoryForUser(
+  userId: string,
+  limit = 50,
+  offset = 0,
+): Promise<{ entries: SyncHistoryEntry[]; total: number }> {
+  return withMutex(async () => {
+    const store = await readStore();
+    // To filter by user, we need to look up the session's userId
+    // For now, filter by checking sessions that belong to this user
+    const userSessionIds = new Set(
+      Object.values(store.sessions)
+        .filter((s) => s.userId === userId)
+        .map((s) => s.id),
+    );
+    const history = (store.syncHistory ?? []).filter((e) =>
+      userSessionIds.has(e.sessionId),
+    );
+    const sorted = [...history].sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+    return {
+      entries: sorted.slice(offset, offset + limit),
+      total: sorted.length,
+    };
   });
 }

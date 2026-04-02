@@ -15,7 +15,7 @@ export interface AppEnv {
   syncRateLimitWindowMs: number;
   syncRateLimitMaxRequests: number;
   syncAllowInsecureDevUserIdFallback: boolean;
-  syncSnapshotRetentionCount: number;
+
   syncMaxArrayItems: number;
   syncMaxObjectKeys: number;
   syncMaxJsonDepth: number;
@@ -151,11 +151,7 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
       env.SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK,
       nodeEnv !== "production",
     ),
-    syncSnapshotRetentionCount: parseIntEnv(
-      env.SYNC_SNAPSHOT_RETENTION_COUNT,
-      20,
-      "SYNC_SNAPSHOT_RETENTION_COUNT",
-    ),
+
     syncMaxArrayItems: parseIntEnv(
       env.SYNC_MAX_ARRAY_ITEMS,
       100_000,

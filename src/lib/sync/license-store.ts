@@ -9,6 +9,8 @@ import type {
   LicensePlan,
   LicenseStatus,
   LicenseStoreFile,
+  StorageBackendConfig,
+  StorageBackendType,
 } from "./license-contracts";
 import { PLAN_DEFAULTS } from "./license-contracts";
 import { generateLicenseKey } from "./license-keygen";
@@ -26,7 +28,7 @@ function nowIso(): string {
 }
 
 function emptyStore(): LicenseStoreFile {
-  return { version: 1, licenses: {}, groups: {}, devices: {} };
+  return { version: 1, licenses: {}, groups: {}, devices: {}, storageBackends: {} };
 }
 
 async function ensureDataDir(): Promise<void> {
@@ -43,7 +45,12 @@ async function readStore(): Promise<LicenseStoreFile> {
       "version" in parsed &&
       "licenses" in parsed
     ) {
-      return parsed as LicenseStoreFile;
+      const store = parsed as LicenseStoreFile;
+      // Backfill storageBackends for stores created before Phase 2
+      if (!store.storageBackends) {
+        (store as any).storageBackends = {};
+      }
+      return store;
     }
     return emptyStore();
   } catch (error: unknown) {
@@ -240,8 +247,76 @@ export async function updateGroup(
 }
 
 // ---------------------------------------------------------------------------
+// License lookup by key
+// ---------------------------------------------------------------------------
+
+export async function findLicenseByKey(licenseKey: string): Promise<License | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.licenses).find((l) => l.licenseKey === licenseKey) ?? null;
+  });
+}
+
+export async function getGroupForLicense(licenseId: string): Promise<ClientGroup | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.groups).find((g) => g.licenseId === licenseId) ?? null;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Device operations
 // ---------------------------------------------------------------------------
+
+export async function registerDevice(
+  licenseId: string,
+  groupId: string,
+  deviceId: string,
+  deviceName: string,
+): Promise<DeviceRegistration> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const license = store.licenses[licenseId];
+    if (!license) throw new Error(`License not found: ${licenseId}`);
+
+    // Check if device already registered
+    const existing = store.devices[deviceId];
+    if (existing && existing.licenseId === licenseId) {
+      existing.lastSeenAt = nowIso();
+      await writeStore(store);
+      return existing;
+    }
+
+    // Check device limit
+    if (license.activeDevices.length >= license.maxDevices) {
+      throw new Error(`Device limit reached (${license.maxDevices})`);
+    }
+
+    const group = store.groups[groupId];
+    const device: DeviceRegistration = {
+      deviceId,
+      groupId,
+      licenseId,
+      deviceName,
+      registeredAt: nowIso(),
+      lastSeenAt: nowIso(),
+      lastSyncAt: null,
+      lastMarkerHash: null,
+      isFixedMaster: group?.fixedMasterDeviceId === deviceId,
+    };
+    store.devices[deviceId] = device;
+    license.activeDevices.push(deviceId);
+    await writeStore(store);
+    return device;
+  });
+}
+
+export async function getDevice(deviceId: string): Promise<DeviceRegistration | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return store.devices[deviceId] ?? null;
+  });
+}
 
 export async function getDevicesForLicense(licenseId: string): Promise<DeviceRegistration[]> {
   return withMutex(async () => {
@@ -269,5 +344,90 @@ export async function deregisterDevice(
 
     await writeStore(store);
     return true;
+  });
+}
+
+export async function getDevicesForUser(userId: string): Promise<DeviceRegistration[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    // Find groups owned by this user
+    const userGroupIds = new Set(
+      Object.values(store.groups)
+        .filter((g) => g.ownerId === userId)
+        .map((g) => g.id),
+    );
+    return Object.values(store.devices).filter((d) => userGroupIds.has(d.groupId));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Storage backend CRUD
+// ---------------------------------------------------------------------------
+
+export async function createStorageBackend(
+  config: Omit<StorageBackendConfig, "id" | "createdAt">,
+): Promise<StorageBackendConfig> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const id = randomUUID();
+    const backend = {
+      ...config,
+      id,
+      createdAt: nowIso(),
+    } as StorageBackendConfig;
+    store.storageBackends[id] = backend;
+    await writeStore(store);
+    return backend;
+  });
+}
+
+export async function getStorageBackend(id: string): Promise<StorageBackendConfig | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return store.storageBackends[id] ?? null;
+  });
+}
+
+export async function getAllStorageBackends(): Promise<StorageBackendConfig[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.storageBackends);
+  });
+}
+
+export async function updateStorageBackend(
+  id: string,
+  updates: Partial<Omit<StorageBackendConfig, "id" | "createdAt" | "type">>,
+): Promise<StorageBackendConfig | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const backend = store.storageBackends[id];
+    if (!backend) return null;
+
+    Object.assign(backend, updates);
+    await writeStore(store);
+    return backend;
+  });
+}
+
+export async function deleteStorageBackend(id: string): Promise<{ deleted: boolean; reason?: string }> {
+  return withMutex(async () => {
+    const store = await readStore();
+    if (!store.storageBackends[id]) return { deleted: false, reason: "not_found" };
+
+    // Check if any group references this backend
+    const assignedGroups = Object.values(store.groups).filter(
+      (g) => g.storageBackendId === id,
+    );
+    if (assignedGroups.length > 0) {
+      return {
+        deleted: false,
+        reason: `Backend is assigned to ${assignedGroups.length} group(s): ${assignedGroups.map((g) => g.name).join(", ")}`,
+      };
+    }
+
+    delete store.storageBackends[id];
+    await writeStore(store);
+    return { deleted: true };
   });
 }

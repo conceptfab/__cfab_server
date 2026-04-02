@@ -3,6 +3,9 @@ import {
   cleanupOldSessions,
   getCompletedSessionIds,
   getActiveSessionIds,
+  expireAsyncPackages,
+  cleanupOldAsyncPackages,
+  getCleanableAsyncPackageIds,
 } from "./session-store";
 import { deleteSessionDir, listSessionDirs } from "./sftp-manager";
 import { log } from "@/lib/observability/logger";
@@ -39,7 +42,14 @@ function runCleanup(): void {
 
       // 3. Delete SFTP dirs for those sessions first
       for (const id of completedIds) {
-        await deleteSessionDir(id);
+        try {
+          await deleteSessionDir(id);
+        } catch (err) {
+          log("error", "session-cleanup.delete-failed", {
+            sessionId: id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       // 4. Now safe to remove sessions from JSON store
@@ -52,15 +62,37 @@ function runCleanup(): void {
         const activeSet = new Set(activeIds);
         for (const dir of sftpDirs) {
           if (!activeSet.has(dir)) {
-            await deleteSessionDir(dir);
+            try {
+              await deleteSessionDir(dir);
+            } catch (err) {
+              log("error", "session-cleanup.orphan-delete-failed", {
+                dir,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }
           }
         }
       } catch {
         // SFTP may not be configured — ignore
       }
 
-      if (expired > 0 || removed > 0) {
-        log("info", "session-cleanup.completed", { expired, removed });
+      // 6. Expire and cleanup async delta packages
+      const asyncExpired = await expireAsyncPackages();
+      const cleanableAsync = await getCleanableAsyncPackageIds();
+      for (const { id, storagePath } of cleanableAsync) {
+        try {
+          await deleteSessionDir(`async/${id}`);
+        } catch (err) {
+          log("error", "session-cleanup.async-delete-failed", {
+            packageId: id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const asyncRemoved = await cleanupOldAsyncPackages(MAX_SESSION_AGE_MS);
+
+      if (expired > 0 || removed > 0 || asyncExpired > 0 || asyncRemoved > 0) {
+        log("info", "session-cleanup.completed", { expired, removed, asyncExpired, asyncRemoved });
       }
     } catch (error) {
       log("error", "session-cleanup.error", {

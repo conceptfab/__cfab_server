@@ -1,4 +1,39 @@
 // ---------------------------------------------------------------------------
+// Storage backend types
+// ---------------------------------------------------------------------------
+
+export type StorageBackendType = "sftp" | "aws-s3";
+
+interface StorageBackendBase {
+  id: string;
+  type: StorageBackendType;
+  name: string;
+  basePath: string;
+  maxFileSizeMb: number;
+  sessionTtlMinutes: number;
+  createdAt: string;
+}
+
+export interface SftpStorageBackend extends StorageBackendBase {
+  type: "sftp";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+}
+
+export interface S3StorageBackend extends StorageBackendBase {
+  type: "aws-s3";
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  usePresignedUrls: boolean;
+}
+
+export type StorageBackendConfig = SftpStorageBackend | S3StorageBackend;
+
+// ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
 
@@ -56,6 +91,7 @@ export interface LicenseStoreFile {
   licenses: Record<string, License>;
   groups: Record<string, ClientGroup>;
   devices: Record<string, DeviceRegistration>;
+  storageBackends: Record<string, StorageBackendConfig>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,4 +176,62 @@ export interface AdminDeviceListResponse {
 export interface AdminDeleteResponse {
   ok: true;
   deleted: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Storage backend admin API
+// ---------------------------------------------------------------------------
+
+export interface AdminCreateStorageBackendBody {
+  type: StorageBackendType;
+  name: string;
+  basePath: string;
+  maxFileSizeMb?: number;
+  sessionTtlMinutes?: number;
+  // SFTP fields
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  // S3 fields
+  region?: string;
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  usePresignedUrls?: boolean;
+}
+
+export interface AdminUpdateStorageBackendBody {
+  name?: string;
+  basePath?: string;
+  maxFileSizeMb?: number;
+  sessionTtlMinutes?: number;
+  // SFTP fields
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  // S3 fields
+  region?: string;
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  usePresignedUrls?: boolean;
+}
+
+export interface AdminStorageBackendResponse {
+  ok: true;
+  storageBackend: StorageBackendConfig;
+}
+
+export interface AdminStorageBackendListResponse {
+  ok: true;
+  storageBackends: StorageBackendConfig[];
+  total: number;
+}
+
+export interface AdminStorageBackendTestResponse {
+  ok: true;
+  reachable: boolean;
+  error: string | null;
 }

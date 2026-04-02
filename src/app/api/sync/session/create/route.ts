@@ -19,6 +19,9 @@ export async function POST(request: Request) {
       if (!body || typeof body.deviceId !== "string" || !body.deviceId.trim()) {
         throw badRequest("deviceId is required and must be a non-empty string");
       }
+      if (body.deviceId.length > 128) {
+        throw badRequest("deviceId too long (max 128 characters)");
+      }
       return {
         deviceId: body.deviceId,
         markerHash: typeof body.markerHash === "string" ? body.markerHash : null,
