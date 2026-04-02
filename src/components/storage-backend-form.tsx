@@ -7,11 +7,11 @@ import { useState, useRef } from "react";
 // ---------------------------------------------------------------------------
 
 export function CreateStorageBackendForm() {
-  const [type, setType] = useState<"sftp" | "aws-s3">("sftp");
+  const [type, setType] = useState<"sftp" | "ftp" | "aws-s3">("ftp");
   const [name, setName] = useState("");
   const [basePath, setBasePath] = useState("/timeflow-sync/");
   const [host, setHost] = useState("");
-  const [port, setPort] = useState(22);
+  const [port, setPort] = useState(21);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [creating, setCreating] = useState(false);
@@ -71,9 +71,10 @@ export function CreateStorageBackendForm() {
             Typ
             <select
               value={type}
-              onChange={(e) => setType(e.target.value as "sftp" | "aws-s3")}
+              onChange={(e) => setType(e.target.value as "sftp" | "ftp" | "aws-s3")}
               className="h-9 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
             >
+              <option value="ftp">FTP</option>
               <option value="sftp">SFTP</option>
               <option value="aws-s3">AWS S3</option>
             </select>
@@ -103,7 +104,7 @@ export function CreateStorageBackendForm() {
           </label>
         </div>
 
-        {type === "sftp" && (
+        {(type === "sftp" || type === "ftp") && (
           <div className="flex flex-wrap items-end gap-3">
             <label className="grid gap-1 text-xs text-zinc-400">
               Host
@@ -122,7 +123,7 @@ export function CreateStorageBackendForm() {
               <input
                 type="number"
                 value={port}
-                onChange={(e) => setPort(Number(e.target.value) || 22)}
+                onChange={(e) => setPort(Number(e.target.value) || (type === "ftp" ? 21 : 22))}
                 min={1}
                 max={65535}
                 className="h-9 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"

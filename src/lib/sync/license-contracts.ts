@@ -2,7 +2,7 @@
 // Storage backend types
 // ---------------------------------------------------------------------------
 
-export type StorageBackendType = "sftp" | "aws-s3";
+export type StorageBackendType = "sftp" | "ftp" | "aws-s3";
 
 interface StorageBackendBase {
   id: string;
@@ -22,6 +22,15 @@ export interface SftpStorageBackend extends StorageBackendBase {
   password: string;
 }
 
+export interface FtpStorageBackend extends StorageBackendBase {
+  type: "ftp";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  secure: boolean;
+}
+
 export interface S3StorageBackend extends StorageBackendBase {
   type: "aws-s3";
   region: string;
@@ -31,7 +40,7 @@ export interface S3StorageBackend extends StorageBackendBase {
   usePresignedUrls: boolean;
 }
 
-export type StorageBackendConfig = SftpStorageBackend | S3StorageBackend;
+export type StorageBackendConfig = SftpStorageBackend | FtpStorageBackend | S3StorageBackend;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -189,11 +198,12 @@ export interface AdminCreateStorageBackendBody {
   basePath: string;
   maxFileSizeMb?: number;
   sessionTtlMinutes?: number;
-  // SFTP fields
+  // SFTP / FTP fields
   host?: string;
   port?: number;
   username?: string;
   password?: string;
+  secure?: boolean;
   // S3 fields
   region?: string;
   bucket?: string;

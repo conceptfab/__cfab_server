@@ -1,9 +1,12 @@
 import SftpClient from "ssh2-sftp-client";
+import * as ftp from "basic-ftp";
+import { Readable, Writable } from "node:stream";
 import { getEnv } from "@/lib/config/env";
 import { log } from "@/lib/observability/logger";
 import type {
   StorageBackendConfig,
   SftpStorageBackend,
+  FtpStorageBackend,
   S3StorageBackend,
 } from "@/lib/sync/license-contracts";
 
@@ -201,12 +204,151 @@ function createS3Adapter(_config: S3StorageBackend): StorageAdapter {
   };
 }
 
+// --- FTP adapter (plain FTP using basic-ftp) ---
+
+function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
+  async function withFtp<T>(fn: (client: ftp.Client) => Promise<T>): Promise<T> {
+    const client = new ftp.Client();
+    client.ftp.verbose = false;
+    try {
+      await client.access({
+        host: config.host,
+        port: config.port,
+        user: config.username,
+        password: config.password,
+        secure: config.secure,
+      });
+      return await fn(client);
+    } finally {
+      client.close();
+    }
+  }
+
+  return {
+    async createSessionDir(sessionId: string): Promise<string> {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      await withFtp(async (client) => {
+        await client.ensureDir(`${sessionPath}/slave-upload`);
+        await client.ensureDir(`${sessionPath}/master-merged`);
+      });
+      log("info", "ftp.session-dir.created", { sessionId, path: sessionPath, backendId: config.id });
+      return sessionPath;
+    },
+
+    async deleteSessionDir(sessionId: string): Promise<void> {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      try {
+        await withFtp(async (client) => {
+          await client.removeDir(sessionPath);
+        });
+        log("info", "ftp.session-dir.deleted", { sessionId, backendId: config.id });
+      } catch (error) {
+        log("error", "ftp.session-dir.delete-failed", {
+          sessionId,
+          backendId: config.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    async healthCheck(): Promise<void> {
+      await withFtp(async (client) => {
+        const testDir = `${config.basePath}_health_check_${Date.now()}`;
+        await client.ensureDir(testDir);
+        await client.removeDir(testDir);
+      });
+    },
+
+    async fullTest(): Promise<StorageFullTestResult> {
+      const start = Date.now();
+      const testPayload = Buffer.from(`cfab-ftp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const testDir = `${config.basePath}_fulltest_${Date.now()}`;
+      const testFile = `${testDir}/test.bin`;
+
+      try {
+        const result = await withFtp(async (client) => {
+          // 1. Create dir
+          await client.ensureDir(testDir);
+
+          // 2. Upload
+          const uploadStream = Readable.from(testPayload);
+          await client.uploadFrom(uploadStream, testFile);
+          const uploadOk = true;
+
+          // 3. Download
+          const chunks: Buffer[] = [];
+          const downloadStream = new Writable({
+            write(chunk, _encoding, callback) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              callback();
+            },
+          });
+          await client.downloadTo(downloadStream, testFile);
+          const downloaded = Buffer.concat(chunks);
+          const downloadOk = true;
+
+          // 4. Compare
+          const matchOk = downloaded.equals(testPayload);
+
+          // 5. Cleanup
+          await client.remove(testFile);
+          await client.removeDir(testDir);
+
+          return { uploadOk, downloadOk, matchOk, latencyMs: Date.now() - start, error: null };
+        });
+        return result;
+      } catch (error) {
+        try {
+          await withFtp(async (client) => {
+            await client.removeDir(testDir);
+          });
+        } catch { /* ignore cleanup errors */ }
+
+        return {
+          uploadOk: false,
+          downloadOk: false,
+          matchOk: false,
+          latencyMs: Date.now() - start,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    async listSessionDirs(): Promise<string[]> {
+      return withFtp(async (client) => {
+        try {
+          const list = await client.list(config.basePath);
+          return list.filter((item) => item.isDirectory).map((item) => item.name);
+        } catch {
+          return [];
+        }
+      });
+    },
+
+    getConnectionInfo(sessionId: string): StorageConnectionInfo {
+      const sessionPath = `${config.basePath}${sessionId}`;
+      return {
+        protocol: "sftp",
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        basePath: config.basePath,
+        uploadPath: `${sessionPath}/slave-upload/`,
+        downloadPath: `${sessionPath}/master-merged/`,
+      };
+    },
+  };
+}
+
 // --- Factory ---
 
 export function createStorageAdapter(config: StorageBackendConfig): StorageAdapter {
   switch (config.type) {
     case "sftp":
       return createSftpAdapter(config);
+    case "ftp":
+      return createFtpAdapter(config);
     case "aws-s3":
       return createS3Adapter(config);
     default:

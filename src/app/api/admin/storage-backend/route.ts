@@ -4,6 +4,7 @@ import type {
   AdminStorageBackendListResponse,
   AdminStorageBackendResponse,
   SftpStorageBackend,
+  FtpStorageBackend,
   S3StorageBackend,
 } from "@/lib/sync/license-contracts";
 import { createStorageBackend, getAllStorageBackends } from "@/lib/sync/license-store";
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
     "admin-storage-backend-create",
     validateCreateStorageBackendBody,
     async (body): Promise<AdminStorageBackendResponse> => {
-      let config: Omit<SftpStorageBackend, "id" | "createdAt"> | Omit<S3StorageBackend, "id" | "createdAt">;
+      let config: Omit<SftpStorageBackend, "id" | "createdAt"> | Omit<FtpStorageBackend, "id" | "createdAt"> | Omit<S3StorageBackend, "id" | "createdAt">;
 
       if (body.type === "sftp") {
         config = {
@@ -37,6 +38,19 @@ export async function POST(request: Request) {
           port: body.port ?? 22,
           username: body.username!,
           password: body.password!,
+        };
+      } else if (body.type === "ftp") {
+        config = {
+          type: "ftp",
+          name: body.name,
+          basePath: body.basePath,
+          maxFileSizeMb: body.maxFileSizeMb ?? 100,
+          sessionTtlMinutes: body.sessionTtlMinutes ?? 60,
+          host: body.host!,
+          port: body.port ?? 21,
+          username: body.username!,
+          password: body.password!,
+          secure: body.secure ?? false,
         };
       } else {
         config = {

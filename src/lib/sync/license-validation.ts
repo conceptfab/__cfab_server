@@ -15,7 +15,7 @@ import type {
 
 const VALID_PLANS: LicensePlan[] = ["free", "starter", "pro", "enterprise"];
 const VALID_STATUSES: LicenseStatus[] = ["active", "trial", "expired", "suspended", "revoked"];
-const VALID_BACKEND_TYPES: StorageBackendType[] = ["sftp", "aws-s3"];
+const VALID_BACKEND_TYPES: StorageBackendType[] = ["sftp", "ftp", "aws-s3"];
 
 function assertObject(body: unknown): asserts body is Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -145,6 +145,12 @@ export function validateCreateStorageBackendBody(body: unknown): AdminCreateStor
     base.port = optionalPositiveInt(body.port, "port");
     base.username = requireString(body.username, "username");
     base.password = requireString(body.password, "password");
+  } else if (type === "ftp") {
+    base.host = requireString(body.host, "host");
+    base.port = optionalPositiveInt(body.port, "port");
+    base.username = requireString(body.username, "username");
+    base.password = requireString(body.password, "password");
+    base.secure = typeof body.secure === "boolean" ? body.secure : false;
   } else if (type === "aws-s3") {
     base.region = requireString(body.region, "region");
     base.bucket = requireString(body.bucket, "bucket");
