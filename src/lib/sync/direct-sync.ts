@@ -206,6 +206,14 @@ export async function getDirectSyncHistory(): Promise<DirectSyncHistoryEntry[]> 
   return (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
 }
 
+export async function clearDirectSyncHistory(): Promise<{ cleared: number }> {
+  const existing = (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
+  const count = existing.length;
+  await ensureDir(REPO_DIR);
+  await writeJson(HISTORY_FILE, []);
+  return { cleared: count };
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------

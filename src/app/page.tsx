@@ -13,6 +13,7 @@ import type { SyncSession, SyncSessionStatus, SyncStepLog, AsyncDeltaPackage, As
 import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, LicenseStatus } from "@/lib/sync/license-contracts";
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import type { DirectSyncHistoryEntry } from "@/lib/sync/direct-sync";
+import { ClearSyncHistoryButton } from "@/components/clear-sync-history-button";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
 export const runtime = "nodejs";
@@ -757,9 +758,12 @@ function DirectSyncHistorySection({ entries }: { entries: DirectSyncHistoryEntry
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-zinc-200">Historia Direct Sync</h2>
-        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          ostatnie {entries.length}
-        </span>
+        <div className="flex items-center gap-2">
+          {entries.length > 0 && <ClearSyncHistoryButton />}
+          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+            ostatnie {entries.length}
+          </span>
+        </div>
       </div>
       {entries.length === 0 ? (
         <p className="mt-3 text-sm text-zinc-500">Brak wpisow direct sync.</p>
