@@ -475,7 +475,13 @@ export async function updateStorageBackend(
     const backend = store.storageBackends[id];
     if (!backend) return null;
 
-    Object.assign(backend, updates);
+    // Only apply keys that are explicitly provided (not undefined)
+    // so that omitting a field (e.g. password) preserves the existing value.
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        (backend as Record<string, unknown>)[key] = value;
+      }
+    }
     await writeStore(store);
     return backend;
   });
