@@ -28,6 +28,7 @@ export interface AppEnv {
   sftpMaxFileSizeMb: number;
   syncEncryptionKey: string | null;
   adminApiToken: string | null;
+  syncSnapshotRetentionCount: number;
 }
 
 let cachedEnv: AppEnv | null = null;
@@ -176,6 +177,11 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     sftpMaxFileSizeMb: parseIntEnv(env.SFTP_MAX_FILE_SIZE_MB, 100, "SFTP_MAX_FILE_SIZE_MB"),
     syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
     adminApiToken: env.ADMIN_API_TOKEN?.trim() || null,
+    syncSnapshotRetentionCount: parseIntEnv(
+      env.SYNC_SNAPSHOT_RETENTION_COUNT,
+      10,
+      "SYNC_SNAPSHOT_RETENTION_COUNT",
+    ),
   };
 
   if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
