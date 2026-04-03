@@ -133,10 +133,12 @@ export async function handleSyncPost<TBody, TResponse>(
   let userIdForLogs: string | null = null;
   let deviceIdForLogs: string | null = null;
   let rawBytes = 0;
+  let compressedBytes: number | undefined;
 
   try {
     const parsed = await parseJsonBody(request, env.syncMaxPayloadBytes);
     rawBytes = parsed.rawBytes;
+    compressedBytes = parsed.compressedBytes;
 
     const body = spec.parseBody(parsed.body);
     const bodyUserId = spec.getBodyUserId(body) ?? null;
@@ -177,6 +179,7 @@ export async function handleSyncPost<TBody, TResponse>(
       ip: clientIp,
       latencyMs,
       rawBytes,
+      ...(compressedBytes != null ? { compressedBytes, compressionRatio: `${((1 - compressedBytes / rawBytes) * 100).toFixed(0)}%` } : {}),
       ...(spec.summarizeResult ? spec.summarizeResult(result) : {}),
     });
 

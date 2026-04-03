@@ -1,8 +1,10 @@
+import { gunzipSync } from "node:zlib";
 import { badRequest, payloadTooLarge, unsupportedMediaType } from "@/lib/http/error";
 
 export interface ParsedJsonBody {
   body: unknown;
   rawBytes: number;
+  compressedBytes?: number;
 }
 
 export async function parseJsonBody(
@@ -14,6 +16,48 @@ export async function parseJsonBody(
     throw unsupportedMediaType("Content-Type must be application/json");
   }
 
+  const contentEncoding = (request.headers.get("content-encoding") ?? "").toLowerCase();
+  const isGzip = contentEncoding === "gzip";
+
+  if (isGzip) {
+    // Read compressed bytes, decompress, then parse
+    const compressedBuf = Buffer.from(await request.arrayBuffer());
+    const compressedBytes = compressedBuf.length;
+
+    // Limit compressed payload to 2x maxBytes (gzip can't expand more than ~1000x)
+    if (compressedBytes > maxBytes * 2) {
+      throw payloadTooLarge(
+        `Compressed body exceeds limit (${compressedBytes} bytes)`,
+      );
+    }
+
+    let decompressed: Buffer;
+    try {
+      decompressed = gunzipSync(compressedBuf);
+    } catch {
+      throw badRequest("Invalid gzip body", "invalid_gzip");
+    }
+
+    const rawBytes = decompressed.length;
+    if (rawBytes > maxBytes) {
+      throw payloadTooLarge(
+        `Decompressed body exceeds limit (${rawBytes} > ${maxBytes} bytes)`,
+      );
+    }
+
+    const raw = decompressed.toString("utf8");
+    if (raw.trim().length === 0) {
+      throw badRequest("Request body is empty");
+    }
+
+    try {
+      return { body: JSON.parse(raw) as unknown, rawBytes, compressedBytes };
+    } catch {
+      throw badRequest("Invalid JSON body", "invalid_json");
+    }
+  }
+
+  // Uncompressed path (original logic)
   const contentLengthHeader = request.headers.get("content-length");
   if (contentLengthHeader) {
     const contentLength = Number.parseInt(contentLengthHeader, 10);
