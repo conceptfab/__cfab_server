@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
     // Use the config file location, not the shell cwd (which may be a parent folder).
     root: projectRoot,
   },
+  serverExternalPackages: ["ssh2", "ssh2-sftp-client"],
 };
 
 export default nextConfig;

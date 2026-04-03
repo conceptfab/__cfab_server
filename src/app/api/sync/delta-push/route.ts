@@ -1,56 +1,82 @@
-import { NextResponse } from "next/server";
-import { z } from "zod";
-
-import { pushDelta } from "@/lib/sync/service";
-import type { SyncDeltaPushRequest } from "@/lib/sync/contracts";
-import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
-
 export const runtime = "nodejs";
+
+import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
+import { applyDeltaPush } from "@/lib/sync/online-sync-repository";
+import { touchDeviceLastSeen, updateDeviceLastSync } from "@/lib/sync/license-store";
+import { badRequest } from "@/lib/http/error";
+import type { TableHashes, DeltaData } from "@/lib/sync/contracts";
+
+interface DeltaPushBody {
+  userId: string;
+  deviceId: string;
+  baseRevision: number;
+  tableHashes: TableHashes;
+  delta: DeltaData;
+}
+
+interface DeltaPushResponse {
+  ok: true;
+  accepted: boolean;
+  revision: number;
+  serverTableHashes: TableHashes;
+  reason: string;
+}
 
 export async function OPTIONS(request: Request) {
   return handleSyncOptions(request);
 }
 
-const TableHashesSchema = z.object({
-  projects: z.string(),
-  applications: z.string(),
-  sessions: z.string(),
-  manual_sessions: z.string(),
-});
-
-const DeltaPushSchema = z.object({
-  userId: z.string(),
-  deviceId: z.string(),
-  baseRevision: z.number(),
-  tableHashes: TableHashesSchema,
-  delta: z.object({
-      projects: z.array(z.any()),
-      applications: z.array(z.any()),
-      sessions: z.array(z.any()),
-      manual_sessions: z.array(z.any()),
-      tombstones: z.array(z.object({
-          table_name: z.string(),
-          record_id: z.string(),
-          record_uuid: z.string(),
-          deleted_at: z.string(),
-          sync_key: z.string(),
-      })),
-  }),
-});
-
 export async function POST(request: Request) {
-  return handleSyncPost(request, {
-    route: "push",
-    parseBody: (body) => DeltaPushSchema.parse(body),
-    getBodyUserId: (body) => body.userId,
-    getDeviceId: (body) => body.deviceId,
-    execute: ({ userId, body }) =>
-      pushDelta({
-        userId,
+  return handleSyncPost<DeltaPushBody, DeltaPushResponse>(request, {
+    route: "online-delta-push",
+    parseBody: (raw: unknown) => {
+      const body = raw as Record<string, unknown>;
+      if (!body || typeof body.userId !== "string" || !body.userId.trim()) {
+        throw badRequest("userId is required");
+      }
+      if (typeof body.deviceId !== "string" || !body.deviceId.trim()) {
+        throw badRequest("deviceId is required");
+      }
+      if (typeof body.baseRevision !== "number") {
+        throw badRequest("baseRevision is required");
+      }
+      if (!body.tableHashes || typeof body.tableHashes !== "object") {
+        throw badRequest("tableHashes is required");
+      }
+      if (!body.delta || typeof body.delta !== "object") {
+        throw badRequest("delta is required");
+      }
+      return {
+        userId: body.userId,
         deviceId: body.deviceId,
         baseRevision: body.baseRevision,
-        tableHashes: body.tableHashes,
-        delta: body.delta,
-      }),
+        tableHashes: body.tableHashes as TableHashes,
+        delta: body.delta as DeltaData,
+      };
+    },
+    getBodyUserId: (body) => body.userId,
+    getDeviceId: (body) => body.deviceId,
+    execute: async ({ userId, body }) => {
+      void touchDeviceLastSeen(body.deviceId).catch(() => {});
+
+      const result = await applyDeltaPush(
+        userId,
+        body.delta,
+        body.baseRevision,
+        body.tableHashes,
+        body.deviceId,
+      );
+
+      if (result.accepted) {
+        void updateDeviceLastSync(body.deviceId).catch(() => {});
+      }
+
+      return { ok: true as const, ...result };
+    },
+    summarizeResult: (r) => ({
+      accepted: r.accepted,
+      revision: r.revision,
+      reason: r.reason,
+    }),
   });
 }

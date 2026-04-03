@@ -8,7 +8,21 @@ import { log, logError } from "@/lib/observability/logger";
 import { REQUEST_ID_HEADER, getOrCreateRequestId } from "@/lib/observability/request-id";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 
-type SyncRouteName = "status" | "push" | "pull" | "ack";
+type SyncRouteName =
+  | "session-create"
+  | "session-status"
+  | "session-report"
+  | "session-heartbeat"
+  | "session-cancel"
+  | "async-push"
+  | "async-pending"
+  | "async-ack"
+  | "async-reject"
+  | "online-status"
+  | "online-push"
+  | "online-delta-push"
+  | "online-delta-pull"
+  | "online-ack";
 
 export async function validateTokenSyncAuth(request: Request): Promise<string | null> {
     const authHeader = request.headers.get("authorization");
@@ -54,7 +68,7 @@ function buildCorsHeaders(request: Request): HeadersInit {
 
   const headers: Record<string, string> = {
     "access-control-allow-origin": allowOrigin,
-    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "authorization, content-type, x-request-id",
     "access-control-expose-headers": REQUEST_ID_HEADER,
     "access-control-max-age": "600",
@@ -182,6 +196,96 @@ export async function handleSyncPost<TBody, TResponse>(
         ip: clientIp,
         latencyMs,
         rawBytes,
+        ...(isAppError(error)
+          ? {
+              status: error.status,
+              code: error.code,
+              message: error.message,
+            }
+          : {}),
+      },
+    );
+
+    return responseFromError(error, requestId, request);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET handler (no body parsing)
+// ---------------------------------------------------------------------------
+
+interface SyncGetRouteSpec<TResponse> {
+  route: SyncRouteName;
+  extractParams: (request: Request, url: URL) => Record<string, string>;
+  execute: (params: Record<string, string> & { userId: string }) => Promise<TResponse>;
+  summarizeResult?: (result: TResponse) => Record<string, unknown>;
+}
+
+export async function handleSyncGet<TResponse>(
+  request: Request,
+  spec: SyncGetRouteSpec<TResponse>,
+): Promise<NextResponse> {
+  const env = getEnv();
+  const requestId = getOrCreateRequestId(request);
+  const clientIp = getClientIp(request);
+  const startedAt = Date.now();
+
+  let userIdForLogs: string | null = null;
+
+  try {
+    const url = new URL(request.url);
+    const params = spec.extractParams(request, url);
+
+    const auth = authenticateSyncRequest(request, null);
+    userIdForLogs = auth.userId;
+
+    const rateLimitKey = [
+      "sync",
+      spec.route,
+      auth.userId,
+      clientIp ?? "unknown-ip",
+    ].join(":");
+    const rate = checkRateLimit(
+      rateLimitKey,
+      env.syncRateLimitMaxRequests,
+      env.syncRateLimitWindowMs,
+    );
+    if (!rate.allowed) {
+      throw tooManyRequests("Rate limit exceeded", "rate_limited", {
+        retryAfterMs: rate.retryAfterMs,
+      });
+    }
+
+    const result = await spec.execute({
+      ...params,
+      userId: auth.userId,
+    });
+
+    const latencyMs = Date.now() - startedAt;
+    log("info", "sync.request.success", {
+      requestId,
+      route: spec.route,
+      authMethod: auth.method,
+      userId: auth.userId,
+      ip: clientIp,
+      latencyMs,
+      ...(spec.summarizeResult ? spec.summarizeResult(result) : {}),
+    });
+
+    return NextResponse.json(result, {
+      headers: buildHeaders(requestId, request),
+    });
+  } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    log(
+      isAppError(error) && error.status < 500 ? "warn" : "error",
+      "sync.request.failure",
+      {
+        requestId,
+        route: spec.route,
+        userId: userIdForLogs,
+        ip: clientIp,
+        latencyMs,
         ...(isAppError(error)
           ? {
               status: error.status,

@@ -33,15 +33,38 @@ function getBearerToken(request: Request): string | null {
   return token;
 }
 
+// Reverse index: token → userId for O(1) lookup
+// Cached and rebuilt only when the source token map changes.
+let cachedReverseMap: Map<string, string> | null = null;
+let cachedReverseSource: Map<string, string> | null = null;
+
+function getReverseTokenMap(apiTokens: Map<string, string>): Map<string, string> {
+  if (cachedReverseMap && cachedReverseSource === apiTokens) {
+    return cachedReverseMap;
+  }
+  const reverse = new Map<string, string>();
+  for (const [userId, tok] of apiTokens.entries()) {
+    reverse.set(tok, userId);
+  }
+  cachedReverseMap = reverse;
+  cachedReverseSource = apiTokens;
+  return reverse;
+}
+
 function resolveUserByToken(token: string): string | null {
   const env = getEnv();
+  const reverse = getReverseTokenMap(env.syncApiTokens);
 
-  for (const [userId, expectedToken] of env.syncApiTokens.entries()) {
-    if (safeStringEqual(token, expectedToken)) {
-      return userId;
-    }
+  // O(1) candidate lookup, then timing-safe verification
+  const candidate = reverse.get(token);
+  if (candidate === undefined) {
+    return null;
   }
-
+  // Verify with timing-safe comparison to prevent timing attacks
+  const expectedToken = env.syncApiTokens.get(candidate);
+  if (expectedToken && safeStringEqual(token, expectedToken)) {
+    return candidate;
+  }
   return null;
 }
 

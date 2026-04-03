@@ -15,11 +15,19 @@ export interface AppEnv {
   syncRateLimitWindowMs: number;
   syncRateLimitMaxRequests: number;
   syncAllowInsecureDevUserIdFallback: boolean;
-  syncSnapshotRetentionCount: number;
+
   syncMaxArrayItems: number;
   syncMaxObjectKeys: number;
   syncMaxJsonDepth: number;
   databaseUrl: string | null;
+  sftpHost: string | null;
+  sftpPort: number;
+  sftpUser: string | null;
+  sftpPassword: string | null;
+  sftpBasePath: string;
+  sftpMaxFileSizeMb: number;
+  syncEncryptionKey: string | null;
+  adminApiToken: string | null;
 }
 
 let cachedEnv: AppEnv | null = null;
@@ -123,7 +131,7 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     syncApiTokenSecret,
     syncMaxPayloadBytes: parseIntEnv(
       env.SYNC_MAX_PAYLOAD_BYTES,
-      5 * 1024 * 1024,
+      20 * 1024 * 1024,
       "SYNC_MAX_PAYLOAD_BYTES",
     ),
     syncAllowedOrigins: parseCsv(env.SYNC_ALLOWED_ORIGINS),
@@ -143,11 +151,7 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
       env.SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK,
       nodeEnv !== "production",
     ),
-    syncSnapshotRetentionCount: parseIntEnv(
-      env.SYNC_SNAPSHOT_RETENTION_COUNT,
-      20,
-      "SYNC_SNAPSHOT_RETENTION_COUNT",
-    ),
+
     syncMaxArrayItems: parseIntEnv(
       env.SYNC_MAX_ARRAY_ITEMS,
       100_000,
@@ -164,7 +168,23 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
       "SYNC_MAX_JSON_DEPTH",
     ),
     databaseUrl: env.DATABASE_URL?.trim() || null,
+    sftpHost: env.SFTP_HOST?.trim() || null,
+    sftpPort: parseIntEnv(env.SFTP_PORT, 22, "SFTP_PORT"),
+    sftpUser: env.SFTP_USER?.trim() || null,
+    sftpPassword: env.SFTP_PASSWORD?.trim() || null,
+    sftpBasePath: env.SFTP_BASE_PATH?.trim() || "/timeflow-sync/",
+    sftpMaxFileSizeMb: parseIntEnv(env.SFTP_MAX_FILE_SIZE_MB, 100, "SFTP_MAX_FILE_SIZE_MB"),
+    syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
+    adminApiToken: env.ADMIN_API_TOKEN?.trim() || null,
   };
+
+  if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
+    throw new Error("SYNC_ENCRYPTION_KEY must be at least 32 characters");
+  }
+
+  if (config.isProduction && config.sftpHost && !config.syncEncryptionKey) {
+    throw new Error("Production with SFTP requires SYNC_ENCRYPTION_KEY");
+  }
 
   if (config.isProduction && config.syncAuthMode === "token") {
     if (config.syncApiTokens.size === 0) {
