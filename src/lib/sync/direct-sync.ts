@@ -455,6 +455,26 @@ export async function handleDeltaPush(
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
   const currentRevision = meta?.revision ?? 0;
 
+  // Check if delta is empty (no changes to apply)
+  const delta = body.delta;
+  const hasChanges =
+    (delta.projects?.length ?? 0) > 0 ||
+    (delta.applications?.length ?? 0) > 0 ||
+    (delta.sessions?.length ?? 0) > 0 ||
+    (delta.manual_sessions?.length ?? 0) > 0 ||
+    (delta.tombstones?.length ?? 0) > 0;
+
+  if (!hasChanges) {
+    // Nothing to merge — return current state without bumping revision
+    return {
+      ok: true,
+      accepted: true,
+      revision: currentRevision,
+      serverTableHashes: body.tableHashes,
+      reason: "noop_empty_delta",
+    };
+  }
+
   // Load existing snapshot or start fresh
   let snapshot =
     (await readJson<SnapshotArchive>(path.join(dir, "snapshot.json"))) ?? {
@@ -469,7 +489,6 @@ export async function handleDeltaPush(
 
   // Merge delta data into snapshot
   const data = snapshot.data as Record<string, unknown[]>;
-  const delta = body.delta;
 
   // Process tombstones first (deletions)
   if (delta.tombstones && delta.tombstones.length > 0) {
