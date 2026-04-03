@@ -3,12 +3,13 @@
  *
  * Storage layout (per user):
  *   DATA_DIR/online-sync/<userId>/meta.json      — revision, hash, timestamps
- *   DATA_DIR/online-sync/<userId>/snapshot.json   — full data archive
+ *   DATA_DIR/online-sync/<userId>/snapshot.json.gz — gzip-compressed data archive
  *   DATA_DIR/online-sync/_history.json            — recent sync history entries
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { gzipSync, gunzipSync } from "node:zlib";
 import path from "node:path";
 
 import type { TableHashes, DeltaData } from "./contracts";
@@ -46,6 +47,7 @@ export interface DirectSyncHistoryEntry {
 interface UserMeta {
   revision: number;
   payloadSha256: string;
+  diskBytes?: number;
   tableHashes: TableHashes | null;
   updatedAt: string;
   createdAt: string;
@@ -177,6 +179,31 @@ async function readJson<T>(filePath: string): Promise<T | null> {
 
 async function writeJson(filePath: string, data: unknown): Promise<void> {
   await writeFile(filePath, JSON.stringify(data), "utf8");
+}
+
+/** Write snapshot as gzip-compressed JSON (.json.gz) */
+async function writeSnapshotGz(filePath: string, data: unknown): Promise<number> {
+  const json = JSON.stringify(data);
+  const compressed = gzipSync(Buffer.from(json, "utf8"));
+  const gzPath = filePath.replace(/\.json$/, ".json.gz");
+  await writeFile(gzPath, compressed);
+  return compressed.length;
+}
+
+/** Read snapshot — try .json.gz first, fall back to .json for migration */
+async function readSnapshot<T>(filePath: string): Promise<T | null> {
+  const gzPath = filePath.replace(/\.json$/, ".json.gz");
+  try {
+    const compressed = await readFile(gzPath);
+    const raw = gunzipSync(compressed).toString("utf8");
+    return JSON.parse(raw) as T;
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "ENOENT") {
+      // .gz not found — try plain .json (pre-migration)
+      return readJson<T>(filePath);
+    }
+    throw error;
+  }
 }
 
 function sha256(input: string): string {
@@ -332,11 +359,12 @@ export async function handlePush(
 
   const newRevision = currentRevision + 1;
 
-  await writeJson(path.join(dir, "snapshot.json"), body.archive);
+  const diskBytes = await writeSnapshotGz(path.join(dir, "snapshot.json"), body.archive);
 
   const meta: UserMeta = {
     revision: newRevision,
     payloadSha256: hash,
+    diskBytes,
     tableHashes: null,
     updatedAt: now,
     createdAt: existingMeta?.createdAt ?? now,
@@ -407,7 +435,7 @@ export async function handleDeltaPull(
     };
   }
 
-  const snapshot = await readJson<SnapshotArchive>(
+  const snapshot = await readSnapshot<SnapshotArchive>(
     path.join(dir, "snapshot.json"),
   );
 
@@ -487,7 +515,7 @@ export async function handleDeltaPush(
 
   // Load existing snapshot or start fresh
   let snapshot =
-    (await readJson<SnapshotArchive>(path.join(dir, "snapshot.json"))) ?? {
+    (await readSnapshot<SnapshotArchive>(path.join(dir, "snapshot.json"))) ?? {
       version: "1",
       data: {
         projects: [],
@@ -590,11 +618,12 @@ export async function handleDeltaPush(
   const now = new Date().toISOString();
   const newRevision = currentRevision + 1;
 
-  await writeJson(path.join(dir, "snapshot.json"), snapshot);
+  const diskBytes = await writeSnapshotGz(path.join(dir, "snapshot.json"), snapshot);
 
   const newMeta: UserMeta = {
     revision: newRevision,
     payloadSha256: hash,
+    diskBytes,
     tableHashes: body.tableHashes,
     updatedAt: now,
     createdAt: meta?.createdAt ?? now,
@@ -691,7 +720,7 @@ export interface TestRoundtripBody {
 export interface TestRoundtripResponse {
   ok: true;
   steps: {
-    write: { success: boolean; path: string; sizeBytes: number };
+    write: { success: boolean; path: string; sizeBytes: number; diskBytes: number };
     read: { success: boolean; matches: boolean };
     cleanup: { success: boolean };
   };
@@ -717,10 +746,11 @@ export async function handleTestRoundtrip(
   };
   const envelopeStr = JSON.stringify(envelope);
 
-  // Step 1: Write
+  // Step 1: Write as gzip
   let writeOk = false;
+  let diskBytes = 0;
   try {
-    await writeJson(testFile, envelope);
+    diskBytes = await writeSnapshotGz(testFile, envelope);
     writeOk = true;
   } catch (err) {
     log("error", "direct-sync.test-roundtrip.write-failed", {
@@ -729,11 +759,11 @@ export async function handleTestRoundtrip(
     });
   }
 
-  // Step 2: Read back and compare
+  // Step 2: Read back (gzip) and compare
   let readOk = false;
   let matches = false;
   try {
-    const readBack = await readJson<typeof envelope>(testFile);
+    const readBack = await readSnapshot<typeof envelope>(testFile);
     readOk = true;
     matches =
       readBack !== null &&
@@ -746,11 +776,11 @@ export async function handleTestRoundtrip(
     });
   }
 
-  // Step 3: Cleanup
+  // Step 3: Cleanup (.json.gz file)
   let cleanupOk = false;
   try {
     const { unlink } = await import("node:fs/promises");
-    await unlink(testFile);
+    await unlink(testFile.replace(/\.json$/, ".json.gz"));
     cleanupOk = true;
   } catch {
     // file may not exist if write failed
@@ -762,13 +792,17 @@ export async function handleTestRoundtrip(
 
   const roundtripMs = Date.now() - t0;
 
+  const compressionRatio = diskBytes > 0 ? ((1 - diskBytes / envelopeStr.length) * 100).toFixed(0) : "0";
+
   log("info", "direct-sync.test-roundtrip", {
     userId,
     deviceId: body.deviceId,
     writeOk,
     readOk,
     matches,
-    sizeBytes: envelopeStr.length,
+    rawBytes: envelopeStr.length,
+    diskBytes,
+    compressionRatio: `${compressionRatio}%`,
     roundtripMs,
   });
 
@@ -779,17 +813,17 @@ export async function handleTestRoundtrip(
     action: "test",
     revision: 0,
     hash: null,
-    sizeBytes: envelopeStr.length,
+    sizeBytes: diskBytes,
     durationMs: roundtripMs,
     status: writeOk && readOk && matches ? "ok" : "error",
-    detail: `test roundtrip ${(envelopeStr.length / 1024).toFixed(1)} KB, write=${writeOk} read=${readOk} match=${matches}`,
+    detail: `test ${(diskBytes / 1024).toFixed(0)} KB gzip (${(envelopeStr.length / 1024).toFixed(0)} KB raw, ${compressionRatio}%) write=${writeOk} read=${readOk} match=${matches}`,
     timestamp: new Date().toISOString(),
   }).catch(() => {});
 
   return {
     ok: true,
     steps: {
-      write: { success: writeOk, path: testFile, sizeBytes: envelopeStr.length },
+      write: { success: writeOk, path: testFile, sizeBytes: envelopeStr.length, diskBytes },
       read: { success: readOk, matches },
       cleanup: { success: cleanupOk },
     },

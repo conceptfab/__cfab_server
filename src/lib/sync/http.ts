@@ -44,7 +44,7 @@ interface SyncRouteSpec<TBody, TResponse> {
   parseBody: (body: unknown) => TBody;
   getBodyUserId: (body: TBody) => string | null | undefined;
   getDeviceId: (body: TBody) => string;
-  execute: (args: { userId: string; body: TBody }) => Promise<TResponse>;
+  execute: (args: { userId: string; body: TBody; rawBytes: number; compressedBytes?: number }) => Promise<TResponse>;
   summarizeResult?: (result: TResponse) => Record<string, unknown>;
 }
 
@@ -167,6 +167,8 @@ export async function handleSyncPost<TBody, TResponse>(
     const result = await spec.execute({
       userId: auth.userId,
       body,
+      rawBytes,
+      compressedBytes,
     });
 
     const latencyMs = Date.now() - startedAt;
