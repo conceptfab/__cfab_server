@@ -12,6 +12,7 @@ import path from "node:path";
 
 import type { TableHashes, DeltaData } from "./contracts";
 import { log } from "@/lib/observability/logger";
+import { touchDeviceLastSeen, updateDeviceLastSync } from "./license-store";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -172,6 +173,9 @@ export async function handleStatus(
   userId: string,
   body: StatusBody,
 ): Promise<StatusResponse> {
+  // Mark device as seen on every status check
+  touchDeviceLastSeen(body.deviceId).catch(() => {});
+
   const dir = userDir(userId);
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
 
@@ -297,6 +301,9 @@ export async function handlePush(
     hash: hash.substring(0, 12),
     sizeBytes: archiveStr.length,
   });
+
+  // Update device last-sync timestamp in license store
+  updateDeviceLastSync(body.deviceId, hash).catch(() => {});
 
   return {
     ok: true,
@@ -480,6 +487,8 @@ export async function handleDeltaPush(
     hash: hash.substring(0, 12),
     tombstones: delta.tombstones?.length ?? 0,
   });
+
+  updateDeviceLastSync(body.deviceId, hash).catch(() => {});
 
   return {
     ok: true,
