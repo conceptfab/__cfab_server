@@ -69,7 +69,7 @@ function buildCorsHeaders(request: Request): HeadersInit {
   const headers: Record<string, string> = {
     "access-control-allow-origin": allowOrigin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "authorization, content-type, x-request-id",
+    "access-control-allow-headers": "authorization, content-type, content-encoding, x-request-id",
     "access-control-expose-headers": REQUEST_ID_HEADER,
     "access-control-max-age": "600",
   };

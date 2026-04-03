@@ -14,7 +14,7 @@ function buildHeaders(requestId: string): HeadersInit {
     "x-content-type-options": "nosniff",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "authorization, content-type, x-request-id",
+    "access-control-allow-headers": "authorization, content-type, content-encoding, x-request-id",
     "access-control-expose-headers": REQUEST_ID_HEADER,
   };
 }
