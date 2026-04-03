@@ -8,11 +8,11 @@ import {
   SYNC_DASHBOARD_AUTH_COOKIE,
   getDashboardUserIdFromCookie,
 } from "@/lib/auth/dashboard-page-auth";
-import { getEnv } from "@/lib/config/env";
 import type { SyncSession, SyncSessionStatus, SyncStepLog, AsyncDeltaPackage, AsyncPackageStatus } from "@/lib/sync/session-contracts";
 import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, LicenseStatus } from "@/lib/sync/license-contracts";
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
+import type { OnlineSyncUserSummary } from "@/lib/sync/online-sync-repository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -371,26 +371,6 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
         </span>
       </div>
 
-      {/* Global env SFTP info */}
-      <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-        <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Domyslny backend (env)</p>
-        <div className="mt-2 grid gap-1.5 text-xs text-zinc-400 sm:grid-cols-2">
-          <div>Host: <span className="text-zinc-200">{getEnv().sftpHost ?? "nie skonfigurowano"}</span></div>
-          <div>Port: <span className="text-zinc-200">{getEnv().sftpPort}</span></div>
-          <div>User: <span className="text-zinc-200">{getEnv().sftpUser ?? "\u2014"}</span></div>
-          <div>Base path: <span className="text-zinc-200">{getEnv().sftpBasePath}</span></div>
-          <div>Max plik: <span className="text-zinc-200">{getEnv().sftpMaxFileSizeMb} MB</span></div>
-          <div>
-            Klucz szyfrowania:{" "}
-            {getEnv().syncEncryptionKey ? (
-              <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">OK</span>
-            ) : (
-              <span className="inline-flex items-center rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-200">brak</span>
-            )}
-          </div>
-        </div>
-      </div>
-
       <CreateStorageBackendForm />
 
       {storageBackends.length === 0 ? (
@@ -616,6 +596,62 @@ function asyncPackageStatusBadge(status: AsyncPackageStatus): { label: string; c
   }
 }
 
+// ---------------------------------------------------------------------------
+// Section: Online Sync (snapshoty)
+// ---------------------------------------------------------------------------
+
+function OnlineSyncSection({ users }: { users: OnlineSyncUserSummary[] }) {
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-zinc-200">Online Sync — snapshoty</h2>
+        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+          {users.length}
+        </span>
+      </div>
+      {users.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-500">Brak danych online sync.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="px-3 py-2">User ID</th>
+                <th className="px-3 py-2">Rewizja</th>
+                <th className="px-3 py-2">Hash</th>
+                <th className="px-3 py-2">Device</th>
+                <th className="px-3 py-2">Rozmiar</th>
+                <th className="px-3 py-2">Utworzono</th>
+                <th className="px-3 py-2">Ostatnia zmiana</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800">
+              {users.map((u) => {
+                const sizeMb = (u.snapshotSizeBytes / (1024 * 1024)).toFixed(2);
+                const sizeKb = (u.snapshotSizeBytes / 1024).toFixed(1);
+                const sizeLabel = u.snapshotSizeBytes > 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`;
+                return (
+                  <tr key={u.userId}>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{u.userId}</td>
+                    <td className="px-3 py-3 text-zinc-200">{u.revision}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{u.payloadSha256.slice(0, 12)}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">
+                      {u.deviceId ? u.deviceId.slice(0, 12) : "\u2014"}
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300">{sizeLabel}</td>
+                    <td className="px-3 py-3 text-zinc-300">{formatDate(u.createdAt)}</td>
+                    <td className="px-3 py-3 text-zinc-300">{formatDate(u.updatedAt)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AsyncPackagesSection({ packages }: { packages: AsyncDeltaPackage[] }) {
   const pending = packages.filter((p) => p.status === "pending");
   const recent = packages
@@ -750,6 +786,7 @@ function DashboardView({
           </div>
         </header>
 
+        <OnlineSyncSection users={data.onlineSyncUsers} />
         <ActiveSessionsSection sessions={data.activeSessions} />
         <LicensesSection licenses={data.licenses} groups={data.groups} />
         <GroupsSection groups={data.groups} storageBackends={data.storageBackends} />

@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { JsonValue, TableHashes, DeltaData } from "./contracts";
@@ -508,4 +508,56 @@ export async function acknowledgePull(
     isLatest: false,
     reason: "unknown_revision",
   };
+}
+
+/**
+ * List all users that have online-sync data, with their meta + snapshot size.
+ */
+export interface OnlineSyncUserSummary {
+  userId: string;
+  revision: number;
+  payloadSha256: string;
+  tableHashes: TableHashes | null;
+  updatedAt: string;
+  createdAt: string;
+  deviceId: string | null;
+  snapshotSizeBytes: number;
+}
+
+export async function getAllOnlineSyncUsers(): Promise<OnlineSyncUserSummary[]> {
+  try {
+    const entries = await readdir(REPO_DIR, { withFileTypes: true });
+    const results: OnlineSyncUserSummary[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const userId = entry.name;
+      const meta = await readJsonFile<UserSyncMeta>(path.join(REPO_DIR, userId, "meta.json"));
+      if (!meta) continue;
+
+      let snapshotSizeBytes = 0;
+      try {
+        const s = await stat(path.join(REPO_DIR, userId, "snapshot.json"));
+        snapshotSizeBytes = s.size;
+      } catch {}
+
+      results.push({
+        userId,
+        revision: meta.revision,
+        payloadSha256: meta.payloadSha256,
+        tableHashes: meta.tableHashes,
+        updatedAt: meta.updatedAt,
+        createdAt: meta.createdAt,
+        deviceId: meta.deviceId,
+        snapshotSizeBytes,
+      });
+    }
+
+    return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }
