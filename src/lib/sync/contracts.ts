@@ -43,7 +43,7 @@ export interface StoredSnapshot {
   receivedAt: string;
   sourceDeviceId: string;
   sizeBytes: number;
-  archive: Record<string, unknown> | null;
+  archive: Record<string, JsonValue> | null;
   tableHashes?: TableHashes | null;
 }
 
@@ -84,7 +84,7 @@ export interface SyncStatusResponse {
 export interface SyncPushRequest {
   userId: string;
   deviceId: string;
-  archive: Record<string, unknown>;
+  archive: Record<string, JsonValue>;
   knownServerRevision?: number | null;
 }
 
@@ -112,7 +112,7 @@ export interface SyncPullResponse {
   revision: number | null;
   payloadSha256: string | null;
   receivedAt: string | null;
-  archive?: Record<string, unknown>;
+  archive?: Record<string, JsonValue>;
   reason: string;
 }
 
