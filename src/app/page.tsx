@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 
 import { CreateLicenseForm, DeleteLicenseButton } from "@/components/create-license-form";
 import { CreateGroupForm } from "@/components/group-form";
-import { CreateStorageBackendForm, GroupBackendSelector, DeleteStorageBackendButton, TestStorageBackendButton } from "@/components/storage-backend-form";
+import { CreateStorageBackendForm, GroupBackendSelector, DeleteStorageBackendButton, TestStorageBackendButton, EditStorageBackendButton } from "@/components/storage-backend-form";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
@@ -421,6 +421,19 @@ function StorageBackendsSection({ storageBackends }: { storageBackends: StorageB
                   <td className="px-3 py-3 text-zinc-300">{formatDate(sb.createdAt)}</td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-2">
+                      <EditStorageBackendButton
+                        backendId={sb.id}
+                        current={{
+                          name: sb.name,
+                          basePath: sb.basePath,
+                          host: "host" in sb ? sb.host : undefined,
+                          port: "port" in sb ? sb.port : undefined,
+                          username: "username" in sb ? sb.username : undefined,
+                          maxFileSizeMb: sb.maxFileSizeMb,
+                          sessionTtlMinutes: sb.sessionTtlMinutes,
+                          type: sb.type,
+                        }}
+                      />
                       <TestStorageBackendButton backendId={sb.id} />
                       <DeleteStorageBackendButton backendId={sb.id} />
                     </div>

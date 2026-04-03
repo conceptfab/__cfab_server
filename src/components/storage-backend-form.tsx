@@ -278,6 +278,151 @@ export function DeleteStorageBackendButton({ backendId }: DeleteStorageBackendBu
 }
 
 // ---------------------------------------------------------------------------
+// EditStorageBackendButton - inline edit with modal-like dropdown
+// ---------------------------------------------------------------------------
+
+interface EditStorageBackendButtonProps {
+  backendId: string;
+  current: {
+    name: string;
+    basePath: string;
+    host?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+    maxFileSizeMb: number;
+    sessionTtlMinutes: number;
+    type: string;
+  };
+}
+
+export function EditStorageBackendButton({ backendId, current }: EditStorageBackendButtonProps) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState(current.name);
+  const [basePath, setBasePath] = useState(current.basePath);
+  const [host, setHost] = useState(current.host ?? "");
+  const [port, setPort] = useState(current.port ?? 21);
+  const [username, setUsername] = useState(current.username ?? "");
+  const [password, setPassword] = useState("");
+  const [maxFileSizeMb, setMaxFileSizeMb] = useState(current.maxFileSizeMb);
+  const [sessionTtlMinutes, setSessionTtlMinutes] = useState(current.sessionTtlMinutes);
+
+  async function handleSave() {
+    setSaving(true);
+    setError(null);
+
+    try {
+      const body: Record<string, unknown> = { name, basePath, maxFileSizeMb, sessionTtlMinutes };
+      if (current.type === "sftp" || current.type === "ftp") {
+        body.host = host;
+        body.port = port;
+        body.username = username;
+        if (password) body.password = password;
+      }
+
+      const res = await fetch(`/api/admin/storage-backend/${backendId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+
+      if (json.ok) {
+        setOpen(false);
+        window.location.reload();
+      } else {
+        setError(json.error || "Nie udalo sie zapisac zmian");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-300 transition hover:bg-amber-500/20"
+      >
+        Edytuj
+      </button>
+    );
+  }
+
+  const isFtpLike = current.type === "sftp" || current.type === "ftp";
+
+  return (
+    <div className="mt-2 rounded-lg border border-zinc-600 bg-zinc-800/80 p-3 space-y-2">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="grid gap-1 text-xs text-zinc-400">
+          Nazwa
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+            className="h-8 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+        </label>
+        <label className="grid gap-1 text-xs text-zinc-400">
+          Base path
+          <input type="text" value={basePath} onChange={(e) => setBasePath(e.target.value)}
+            className="h-8 w-52 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+        </label>
+        <label className="grid gap-1 text-xs text-zinc-400">
+          Max plik (MB)
+          <input type="number" value={maxFileSizeMb} onChange={(e) => setMaxFileSizeMb(Number(e.target.value) || 100)}
+            min={1} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+        </label>
+        <label className="grid gap-1 text-xs text-zinc-400">
+          TTL sesji (min)
+          <input type="number" value={sessionTtlMinutes} onChange={(e) => setSessionTtlMinutes(Number(e.target.value) || 60)}
+            min={1} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+        </label>
+      </div>
+
+      {isFtpLike && (
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-xs text-zinc-400">
+            Host
+            <input type="text" value={host} onChange={(e) => setHost(e.target.value)}
+              className="h-8 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+          </label>
+          <label className="grid gap-1 text-xs text-zinc-400">
+            Port
+            <input type="number" value={port} onChange={(e) => setPort(Number(e.target.value) || 21)}
+              min={1} max={65535} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+          </label>
+          <label className="grid gap-1 text-xs text-zinc-400">
+            Uzytkownik
+            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+              className="h-8 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
+          </label>
+          <label className="grid gap-1 text-xs text-zinc-400">
+            Haslo (puste = bez zmian)
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="h-8 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100 placeholder:text-zinc-600" />
+          </label>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <button type="button" onClick={handleSave} disabled={saving}
+          className="h-8 rounded-md border border-emerald-500/30 bg-emerald-500/15 px-3 text-xs text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50">
+          {saving ? "Zapisywanie..." : "Zapisz"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)}
+          className="h-8 rounded-md border border-zinc-600 px-3 text-xs text-zinc-300 hover:bg-zinc-700">
+          Anuluj
+        </button>
+        {error && <span className="text-xs text-rose-300">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // TestStorageBackendButton - pełny test upload/download
 // ---------------------------------------------------------------------------
 
