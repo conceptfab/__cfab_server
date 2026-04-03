@@ -5,6 +5,7 @@ import { badRequest, forbidden } from "@/lib/http/error";
 import { validateKeyFormat } from "@/lib/sync/license-keygen";
 import {
   findLicenseByKey,
+  getLicense,
   getGroupForLicense,
   registerDevice,
 } from "@/lib/sync/license-store";
@@ -65,6 +66,9 @@ export async function POST(request: Request) {
       deviceName,
     );
 
+    // Re-read license after registerDevice to get updated activeDevices
+    const updatedLicense = await getLicense(license.id);
+
     log("info", "license.activate", {
       requestId,
       licenseId: license.id,
@@ -82,7 +86,7 @@ export async function POST(request: Request) {
         groupName: group.name,
         deviceId: device.deviceId,
         maxDevices: license.maxDevices,
-        activeDevices: license.activeDevices.length,
+        activeDevices: updatedLicense?.activeDevices.length ?? license.activeDevices.length,
         expiresAt: license.expiresAt,
       },
       { headers },
