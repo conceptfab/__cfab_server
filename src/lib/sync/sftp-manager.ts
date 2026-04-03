@@ -29,6 +29,8 @@ export interface StorageAdapter {
   fullTest(): Promise<StorageFullTestResult>;
   listSessionDirs(): Promise<string[]>;
   getConnectionInfo(sessionId: string): StorageConnectionInfo;
+  uploadFile(remotePath: string, content: Buffer): Promise<void>;
+  downloadFile(remotePath: string): Promise<Buffer | null>;
 }
 
 export interface StorageFullTestResult {
@@ -176,6 +178,29 @@ function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
         downloadPath: `${sessionPath}/master-merged/`,
       };
     },
+
+    async uploadFile(remotePath: string, content: Buffer): Promise<void> {
+      await withSftp(async (sftp) => {
+        // Ensure parent directory exists
+        const dir = remotePath.substring(0, remotePath.lastIndexOf("/"));
+        if (dir) await sftp.mkdir(dir, true);
+        await sftp.put(content, remotePath);
+      });
+    },
+
+    async downloadFile(remotePath: string): Promise<Buffer | null> {
+      try {
+        return await withSftp(async (sftp) => {
+          const result = await sftp.get(remotePath);
+          return Buffer.isBuffer(result) ? result : Buffer.from(result as any);
+        });
+      } catch (error: unknown) {
+        if (typeof error === "object" && error !== null && "code" in error && (error as any).code === 2) {
+          return null; // file not found
+        }
+        throw error;
+      }
+    },
   };
 }
 
@@ -199,6 +224,12 @@ function createS3Adapter(_config: S3StorageBackend): StorageAdapter {
       throw new Error("S3 storage backend is not yet implemented");
     },
     getConnectionInfo(_sessionId: string): StorageConnectionInfo {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async uploadFile(_remotePath: string, _content: Buffer): Promise<void> {
+      throw new Error("S3 storage backend is not yet implemented");
+    },
+    async downloadFile(_remotePath: string): Promise<Buffer | null> {
       throw new Error("S3 storage backend is not yet implemented");
     },
   };
@@ -337,6 +368,33 @@ function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
         uploadPath: `${sessionPath}/slave-upload/`,
         downloadPath: `${sessionPath}/master-merged/`,
       };
+    },
+
+    async uploadFile(remotePath: string, content: Buffer): Promise<void> {
+      await withFtp(async (client) => {
+        const dir = remotePath.substring(0, remotePath.lastIndexOf("/"));
+        if (dir) await client.ensureDir(dir);
+        const stream = Readable.from(content);
+        await client.uploadFrom(stream, remotePath);
+      });
+    },
+
+    async downloadFile(remotePath: string): Promise<Buffer | null> {
+      try {
+        return await withFtp(async (client) => {
+          const chunks: Buffer[] = [];
+          const ws = new Writable({
+            write(chunk, _encoding, callback) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              callback();
+            },
+          });
+          await client.downloadTo(ws, remotePath);
+          return Buffer.concat(chunks);
+        });
+      } catch {
+        return null;
+      }
     },
   };
 }

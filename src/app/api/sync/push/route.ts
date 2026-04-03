@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { saveFullSnapshot } from "@/lib/sync/online-sync-repository";
 import { touchDeviceLastSeen, updateDeviceLastSync } from "@/lib/sync/license-store";
+import { notifyPeers } from "@/lib/sync/event-bus";
 import { badRequest } from "@/lib/http/error";
 
 interface PushBody {
@@ -64,7 +65,16 @@ export async function POST(request: Request) {
       // Update device sync tracking
       void updateDeviceLastSync(body.deviceId, result.payloadSha256).catch(() => {});
 
-      const noOp = result.payloadSha256 === result.payloadSha256; // always true for full push
+      // Notify other connected devices via SSE
+      notifyPeers({
+        type: "sync_available",
+        userId,
+        sourceDeviceId: body.deviceId,
+        revision: result.revision,
+        reason: "snapshot_pushed",
+        timestamp: new Date().toISOString(),
+      });
+
       return {
         ok: true as const,
         accepted: true,

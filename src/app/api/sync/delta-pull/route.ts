@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     execute: async ({ userId, body }) => {
       void touchDeviceLastSeen(body.deviceId).catch(() => {});
 
-      const result = await getSnapshotForPull(userId, body.clientRevision);
+      const result = await getSnapshotForPull(userId, body.clientRevision, body.deviceId);
       return {
         ok: true as const,
         hasUpdate: result.hasUpdate,

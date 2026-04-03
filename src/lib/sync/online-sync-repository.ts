@@ -12,6 +12,8 @@ import path from "node:path";
 
 import type { JsonValue, TableHashes, DeltaData } from "./contracts";
 import { log } from "@/lib/observability/logger";
+import { getDevice, getGroup, getStorageBackend } from "./license-store";
+import { createStorageAdapter, type StorageAdapter } from "./sftp-manager";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -43,8 +45,43 @@ export interface UserSnapshot {
   tombstones?: DeltaData["tombstones"];
 }
 
+const SNAPSHOT_FILENAME = "online-snapshot.json";
+
+function sanitizeFtpPath(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function ensureTrailingSlash(p: string): string {
+  return p.endsWith("/") ? p : `${p}/`;
+}
+
+async function getGroupStorageForDevice(deviceId: string): Promise<{ adapter: StorageAdapter; groupId: string; basePath: string } | null> {
+  const device = await getDevice(deviceId);
+  if (!device) {
+    log("warn", "online-sync.storage-resolve.device-not-found", { deviceId });
+    return null;
+  }
+  const group = await getGroup(device.groupId);
+  if (!group) {
+    log("warn", "online-sync.storage-resolve.group-not-found", { deviceId, groupId: device.groupId });
+    return null;
+  }
+  if (!group.storageBackendId) {
+    log("warn", "online-sync.storage-resolve.no-backend-assigned", { deviceId, groupId: device.groupId, groupName: group.name });
+    return null;
+  }
+  const backend = await getStorageBackend(group.storageBackendId);
+  if (!backend) {
+    log("warn", "online-sync.storage-resolve.backend-not-found", { deviceId, groupId: device.groupId, backendId: group.storageBackendId });
+    return null;
+  }
+  log("info", "online-sync.storage-resolve.ok", { deviceId, groupId: device.groupId, backendId: backend.id, backendType: backend.type, basePath: backend.basePath });
+  const adapter = createStorageAdapter(backend);
+  return { adapter, groupId: device.groupId, basePath: backend.basePath };
+}
+
 // ---------------------------------------------------------------------------
-// File I/O
+// File I/O (local meta only)
 // ---------------------------------------------------------------------------
 
 function userDir(userId: string): string {
@@ -125,7 +162,8 @@ export async function getUserSnapshot(userId: string): Promise<UserSnapshot | nu
 }
 
 /**
- * Save a full archive (push or reseed). Returns new revision + hash.
+ * Save a full archive (push or reseed).
+ * Archive is uploaded to the group's FTP backend. Only meta is stored locally.
  */
 export async function saveFullSnapshot(
   userId: string,
@@ -148,6 +186,25 @@ export async function saveFullSnapshot(
     const newRevision = (existingMeta?.revision ?? 0) + 1;
     const now = nowIso();
 
+    // Upload snapshot to group's FTP backend
+    if (deviceId) {
+      const storage = await getGroupStorageForDevice(deviceId);
+      if (storage) {
+        const remotePath = `${ensureTrailingSlash(storage.basePath)}${sanitizeFtpPath(userId)}/${SNAPSHOT_FILENAME}`;
+        await storage.adapter.uploadFile(remotePath, Buffer.from(serialized, "utf8"));
+        log("info", "online-sync.snapshot-uploaded-ftp", {
+          userId,
+          deviceId,
+          groupId: storage.groupId,
+          remotePath,
+          sizeKB: Math.round(serialized.length / 1024),
+        });
+      } else {
+        log("warn", "online-sync.no-storage-backend", { userId, deviceId });
+      }
+    }
+
+    // Save only meta locally
     const meta: UserSyncMeta = {
       revision: newRevision,
       payloadSha256: hash,
@@ -157,7 +214,6 @@ export async function saveFullSnapshot(
       deviceId,
     };
 
-    await writeJsonFile(snapshotPath(userId), archive);
     await writeJsonFile(metaPath(userId), meta);
 
     log("info", "online-sync.snapshot-saved", {
@@ -201,8 +257,30 @@ export async function applyDeltaPush(
       };
     }
 
-    // Load existing snapshot or start empty
-    let snapshot = await readJsonFile<UserSnapshot>(snapshotPath(userId));
+    // Load existing snapshot from FTP or local fallback
+    let snapshot: UserSnapshot | null = null;
+    let storage: Awaited<ReturnType<typeof getGroupStorageForDevice>> = null;
+    let remotePath = "";
+
+    if (deviceId) {
+      storage = await getGroupStorageForDevice(deviceId);
+      if (storage) {
+        remotePath = `${ensureTrailingSlash(storage.basePath)}${sanitizeFtpPath(userId)}/${SNAPSHOT_FILENAME}`;
+        const buf = await storage.adapter.downloadFile(remotePath);
+        if (buf) {
+          try {
+            snapshot = JSON.parse(buf.toString("utf8")) as UserSnapshot;
+          } catch {
+            log("warn", "online-sync.delta-snapshot-parse-failed", { userId, remotePath });
+          }
+        }
+      }
+    }
+
+    // Fallback to local
+    if (!snapshot) {
+      snapshot = await readJsonFile<UserSnapshot>(snapshotPath(userId));
+    }
     if (!snapshot) {
       snapshot = { version: "1", data: {} };
     }
@@ -276,7 +354,18 @@ export async function applyDeltaPush(
       deviceId,
     };
 
-    await writeJsonFile(snapshotPath(userId), snapshot);
+    // Upload to FTP
+    if (storage && remotePath) {
+      await storage.adapter.uploadFile(remotePath, Buffer.from(serialized, "utf8"));
+      log("info", "online-sync.delta-uploaded-ftp", {
+        userId,
+        deviceId,
+        remotePath,
+        sizeKB: Math.round(serialized.length / 1024),
+      });
+    }
+
+    // Save only meta locally
     await writeJsonFile(metaPath(userId), newMeta);
 
     log("info", "online-sync.delta-applied", {
@@ -402,10 +491,12 @@ export async function checkSyncStatus(
 
 /**
  * Get snapshot for pull (full archive).
+ * Downloads from the group's FTP backend.
  */
 export async function getSnapshotForPull(
   userId: string,
   clientRevision: number | null,
+  deviceId?: string | null,
 ): Promise<{
   hasUpdate: boolean;
   revision: number | null;
@@ -434,14 +525,44 @@ export async function getSnapshotForPull(
     };
   }
 
-  // Client needs the full snapshot
-  const snapshot = await getUserSnapshot(userId);
+  // Try to download from group's FTP backend
+  let snapshot: Record<string, unknown> | null = null;
+
+  if (deviceId) {
+    const storage = await getGroupStorageForDevice(deviceId);
+    if (storage) {
+      const remotePath = `${ensureTrailingSlash(storage.basePath)}${sanitizeFtpPath(userId)}/${SNAPSHOT_FILENAME}`;
+      const buf = await storage.adapter.downloadFile(remotePath);
+      if (buf) {
+        try {
+          snapshot = JSON.parse(buf.toString("utf8")) as Record<string, unknown>;
+          log("info", "online-sync.snapshot-downloaded-ftp", {
+            userId,
+            deviceId,
+            remotePath,
+            sizeKB: Math.round(buf.length / 1024),
+          });
+        } catch {
+          log("warn", "online-sync.snapshot-parse-failed", { userId, remotePath });
+        }
+      }
+    }
+  }
+
+  // Fallback: try local snapshot (legacy)
+  if (!snapshot) {
+    const localSnapshot = await getUserSnapshot(userId);
+    if (localSnapshot) {
+      snapshot = localSnapshot as unknown as Record<string, unknown>;
+    }
+  }
+
   if (!snapshot) {
     return {
       hasUpdate: false,
       revision: meta.revision,
       payloadSha256: meta.payloadSha256,
-      reason: "server_snapshot_pruned",
+      reason: "server_snapshot_not_available",
     };
   }
 
@@ -449,7 +570,7 @@ export async function getSnapshotForPull(
     hasUpdate: true,
     revision: meta.revision,
     payloadSha256: meta.payloadSha256,
-    archive: snapshot as unknown as Record<string, unknown>,
+    archive: snapshot,
     reason: "update_available",
   };
 }

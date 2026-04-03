@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { applyDeltaPush } from "@/lib/sync/online-sync-repository";
 import { touchDeviceLastSeen, updateDeviceLastSync } from "@/lib/sync/license-store";
+import { notifyPeers } from "@/lib/sync/event-bus";
 import { badRequest } from "@/lib/http/error";
 import type { TableHashes, DeltaData } from "@/lib/sync/contracts";
 
@@ -69,6 +70,15 @@ export async function POST(request: Request) {
 
       if (result.accepted) {
         void updateDeviceLastSync(body.deviceId).catch(() => {});
+
+        notifyPeers({
+          type: "sync_available",
+          userId,
+          sourceDeviceId: body.deviceId,
+          revision: result.revision,
+          reason: "delta_pushed",
+          timestamp: new Date().toISOString(),
+        });
       }
 
       return { ok: true as const, ...result };
