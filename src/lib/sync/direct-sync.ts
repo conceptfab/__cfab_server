@@ -316,17 +316,27 @@ export async function handleStatus(
     };
   }
 
-  // Client ahead or hash mismatch — push
+  // Client ahead — should push new data
+  if (body.clientRevision > meta.revision) {
+    return {
+      ok: true,
+      serverRevision: meta.revision,
+      serverHash: meta.payloadSha256,
+      shouldPush: true,
+      shouldPull: false,
+      reason: "client_ahead",
+    };
+  }
+
+  // Same revision but hash mismatch — don't push (would be pointless),
+  // just tell the client the server hash so it can align.
   return {
     ok: true,
     serverRevision: meta.revision,
     serverHash: meta.payloadSha256,
-    shouldPush: true,
+    shouldPush: false,
     shouldPull: false,
-    reason:
-      body.clientRevision > meta.revision
-        ? "client_ahead"
-        : "hash_mismatch",
+    reason: "same_revision_hash_drift",
   };
 }
 
