@@ -1,6 +1,14 @@
 import SftpClient from "ssh2-sftp-client";
 import * as ftp from "basic-ftp";
 import { Readable, Writable } from "node:stream";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
+  HeadBucketCommand,
+} from "@aws-sdk/client-s3";
 import { getEnv } from "@/lib/config/env";
 import { log } from "@/lib/observability/logger";
 import type {
@@ -204,33 +212,175 @@ function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
   };
 }
 
-// --- S3 adapter (placeholder for future implementation) ---
+// --- S3 adapter ---
 
-function createS3Adapter(_config: S3StorageBackend): StorageAdapter {
+function createS3Adapter(config: S3StorageBackend): StorageAdapter {
+  const s3 = new S3Client({
+    region: config.region,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  // S3 doesn't have real directories — we use key prefixes.
+  // basePath from StorageBackendBase (e.g. "sync/") is the prefix root.
+  const prefix = (config as any).basePath?.replace(/\/$/, "") ?? "sync";
+
+  function sessionPrefix(sessionId: string): string {
+    return `${prefix}/${sessionId}/`;
+  }
+
   return {
-    async createSessionDir(_sessionId: string): Promise<string> {
-      throw new Error("S3 storage backend is not yet implemented");
+    async createSessionDir(sessionId: string): Promise<string> {
+      // S3 doesn't need directory creation, but we put a marker so listSessionDirs works
+      const markerKey = `${sessionPrefix(sessionId)}.cfab-session`;
+      await s3.send(new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: markerKey,
+        Body: Buffer.from(new Date().toISOString()),
+      }));
+      log("info", "s3.session-dir.created", { sessionId, bucket: config.bucket, prefix: sessionPrefix(sessionId), backendId: config.id });
+      return sessionPrefix(sessionId);
     },
-    async deleteSessionDir(_sessionId: string): Promise<void> {
-      throw new Error("S3 storage backend is not yet implemented");
+
+    async deleteSessionDir(sessionId: string): Promise<void> {
+      try {
+        // List all objects under session prefix and delete them
+        const pfx = sessionPrefix(sessionId);
+        let continuationToken: string | undefined;
+        const keysToDelete: { Key: string }[] = [];
+
+        do {
+          const listResp = await s3.send(new ListObjectsV2Command({
+            Bucket: config.bucket,
+            Prefix: pfx,
+            ContinuationToken: continuationToken,
+          }));
+          for (const obj of listResp.Contents ?? []) {
+            if (obj.Key) keysToDelete.push({ Key: obj.Key });
+          }
+          continuationToken = listResp.NextContinuationToken;
+        } while (continuationToken);
+
+        if (keysToDelete.length > 0) {
+          // DeleteObjects supports up to 1000 keys at once
+          for (let i = 0; i < keysToDelete.length; i += 1000) {
+            await s3.send(new DeleteObjectsCommand({
+              Bucket: config.bucket,
+              Delete: { Objects: keysToDelete.slice(i, i + 1000) },
+            }));
+          }
+        }
+        log("info", "s3.session-dir.deleted", { sessionId, deletedKeys: keysToDelete.length, backendId: config.id });
+      } catch (error) {
+        log("error", "s3.session-dir.delete-failed", {
+          sessionId,
+          backendId: config.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
+
     async healthCheck(): Promise<void> {
-      throw new Error("S3 storage backend is not yet implemented");
+      await s3.send(new HeadBucketCommand({ Bucket: config.bucket }));
     },
+
     async fullTest(): Promise<StorageFullTestResult> {
-      throw new Error("S3 storage backend is not yet implemented");
+      const start = Date.now();
+      const testPayload = Buffer.from(`cfab-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const testKey = `${prefix}/_fulltest_${Date.now()}/test.bin`;
+
+      try {
+        // Upload
+        await s3.send(new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: testKey,
+          Body: testPayload,
+        }));
+
+        // Download
+        const getResp = await s3.send(new GetObjectCommand({
+          Bucket: config.bucket,
+          Key: testKey,
+        }));
+        const downloaded = Buffer.from(await getResp.Body!.transformToByteArray());
+        const matchOk = downloaded.equals(testPayload);
+
+        // Cleanup
+        await s3.send(new DeleteObjectsCommand({
+          Bucket: config.bucket,
+          Delete: { Objects: [{ Key: testKey }] },
+        }));
+
+        return { uploadOk: true, downloadOk: true, matchOk, latencyMs: Date.now() - start, error: null };
+      } catch (error) {
+        // Try cleanup
+        try {
+          await s3.send(new DeleteObjectsCommand({
+            Bucket: config.bucket,
+            Delete: { Objects: [{ Key: testKey }] },
+          }));
+        } catch { /* ignore */ }
+
+        return {
+          uploadOk: false,
+          downloadOk: false,
+          matchOk: false,
+          latencyMs: Date.now() - start,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
+
     async listSessionDirs(): Promise<string[]> {
-      throw new Error("S3 storage backend is not yet implemented");
+      const pfx = `${prefix}/`;
+      const listResp = await s3.send(new ListObjectsV2Command({
+        Bucket: config.bucket,
+        Prefix: pfx,
+        Delimiter: "/",
+      }));
+      return (listResp.CommonPrefixes ?? [])
+        .map((cp) => cp.Prefix ?? "")
+        .filter((p) => p.length > pfx.length)
+        .map((p) => p.slice(pfx.length).replace(/\/$/, ""));
     },
-    getConnectionInfo(_sessionId: string): StorageConnectionInfo {
-      throw new Error("S3 storage backend is not yet implemented");
+
+    getConnectionInfo(sessionId: string): StorageConnectionInfo {
+      const sp = sessionPrefix(sessionId);
+      return {
+        protocol: "s3",
+        host: `${config.bucket}.s3.${config.region}.amazonaws.com`,
+        port: 443,
+        username: config.accessKeyId,
+        password: config.secretAccessKey,
+        basePath: prefix,
+        uploadPath: `${sp}slave-upload/`,
+        downloadPath: `${sp}master-merged/`,
+      };
     },
-    async uploadFile(_remotePath: string, _content: Buffer): Promise<void> {
-      throw new Error("S3 storage backend is not yet implemented");
+
+    async uploadFile(remotePath: string, content: Buffer): Promise<void> {
+      await s3.send(new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: remotePath,
+        Body: content,
+      }));
     },
-    async downloadFile(_remotePath: string): Promise<Buffer | null> {
-      throw new Error("S3 storage backend is not yet implemented");
+
+    async downloadFile(remotePath: string): Promise<Buffer | null> {
+      try {
+        const resp = await s3.send(new GetObjectCommand({
+          Bucket: config.bucket,
+          Key: remotePath,
+        }));
+        return Buffer.from(await resp.Body!.transformToByteArray());
+      } catch (error: unknown) {
+        if (typeof error === "object" && error !== null && "name" in error && (error as any).name === "NoSuchKey") {
+          return null;
+        }
+        throw error;
+      }
     },
   };
 }

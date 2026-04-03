@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { CreateLicenseForm, DeleteLicenseButton } from "@/components/create-license-form";
+import { CreateGroupForm } from "@/components/group-form";
 import { CreateStorageBackendForm, GroupBackendSelector, DeleteStorageBackendButton, TestStorageBackendButton } from "@/components/storage-backend-form";
 import { SyncStatusLoginForm } from "@/components/sync-status-login-form";
 import {
@@ -12,7 +13,6 @@ import type { SyncSession, SyncSessionStatus, SyncStepLog, AsyncDeltaPackage, As
 import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, LicenseStatus } from "@/lib/sync/license-contracts";
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
-import type { OnlineSyncUserSummary } from "@/lib/sync/online-sync-repository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -303,15 +303,29 @@ function LicensesSection({ licenses, groups }: { licenses: License[]; groups: Cl
 // Section: Grupy klientow
 // ---------------------------------------------------------------------------
 
-function GroupsSection({ groups, storageBackends }: { groups: ClientGroup[]; storageBackends: StorageBackendConfig[] }) {
+function GroupsSection({ groups, storageBackends, licenses }: { groups: ClientGroup[]; storageBackends: StorageBackendConfig[]; licenses: License[] }) {
   const backendOptions = storageBackends.map((b) => ({ id: b.id, name: `${b.name} (${b.type})` }));
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Grupy klientow</h2>
-        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          {groups.length}
-        </span>
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-medium text-zinc-200">Grupy klientow</h2>
+          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+            {groups.length}
+          </span>
+        </div>
+        <CreateGroupForm
+          licenses={licenses.map((l) => ({
+            id: l.id,
+            licenseKey: l.licenseKey,
+            plan: l.plan,
+          }))}
+          storageBackends={storageBackends.map((b) => ({
+            id: b.id,
+            name: b.name,
+            type: b.type,
+          }))}
+        />
       </div>
       {groups.length === 0 ? (
         <p className="mt-3 text-sm text-zinc-500">Brak grup.</p>
@@ -517,6 +531,132 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
 // Section: Historia synchronizacji
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Section: Sync statistics overview
+// ---------------------------------------------------------------------------
+
+function SyncStatsSection({
+  sessions,
+  devices,
+  groups,
+  licenses,
+}: {
+  sessions: SyncSession[];
+  devices: DeviceRegistration[];
+  groups: ClientGroup[];
+  licenses: License[];
+}) {
+  const completed = sessions.filter((s) => s.status === "completed");
+  const failed = sessions.filter((s) => s.status === "failed");
+  const totalSessions = completed.length + failed.length;
+  const successRate = totalSessions > 0 ? Math.round((completed.length / totalSessions) * 100) : 0;
+
+  // Avg duration of completed sessions (ms)
+  const durations = completed
+    .filter((s) => s.createdAt && s.completedAt)
+    .map((s) => new Date(s.completedAt!).getTime() - new Date(s.createdAt).getTime());
+  const avgDurationMs = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+  const avgDurationSec = Math.round(avgDurationMs / 1000);
+
+  // Sessions per device (top 5)
+  const deviceSyncCounts = new Map<string, number>();
+  for (const s of [...completed, ...failed]) {
+    deviceSyncCounts.set(s.masterDeviceId, (deviceSyncCounts.get(s.masterDeviceId) ?? 0) + 1);
+    if (s.slaveDeviceId) {
+      deviceSyncCounts.set(s.slaveDeviceId, (deviceSyncCounts.get(s.slaveDeviceId) ?? 0) + 1);
+    }
+  }
+  const topDevices = [...deviceSyncCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  // License usage
+  const licenseUsage = licenses.map((l) => {
+    const groupsForLicense = groups.filter((g) => g.licenseId === l.id);
+    const devicesForLicense = devices.filter((d) =>
+      groupsForLicense.some((g) => g.id === d.groupId),
+    );
+    return {
+      key: l.licenseKey.slice(0, 12),
+      plan: l.plan,
+      deviceCount: devicesForLicense.length,
+      maxDevices: l.maxDevices,
+    };
+  });
+
+  const statCards = [
+    { label: "Sesje ogolnie", value: totalSessions.toString(), sub: `${completed.length} ok / ${failed.length} blad` },
+    { label: "Skutecznosc", value: `${successRate}%`, sub: totalSessions > 0 ? `z ${totalSessions} sesji` : "brak danych" },
+    { label: "Sredni czas sync", value: avgDurationSec > 60 ? `${Math.round(avgDurationSec / 60)}m ${avgDurationSec % 60}s` : `${avgDurationSec}s`, sub: `z ${durations.length} sesji` },
+    { label: "Aktywne urz.", value: devices.length.toString(), sub: `w ${groups.length} grupach` },
+  ];
+
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+      <h2 className="text-sm font-medium text-zinc-200 mb-4">Statystyki synchronizacji</h2>
+
+      {/* Stats cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {statCards.map((card) => (
+          <div key={card.label} className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+            <p className="text-xs text-zinc-500">{card.label}</p>
+            <p className="mt-1 text-lg font-semibold text-zinc-100">{card.value}</p>
+            <p className="text-xs text-zinc-500">{card.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {/* Top devices */}
+        {topDevices.length > 0 && (
+          <div>
+            <h3 className="text-xs font-medium text-zinc-400 mb-2">Najaktywniejsze urzadzenia</h3>
+            <div className="space-y-1.5">
+              {topDevices.map(([deviceId, count]) => {
+                const device = devices.find((d) => d.deviceId === deviceId);
+                return (
+                  <div key={deviceId} className="flex items-center justify-between rounded border border-zinc-800 px-2.5 py-1.5 text-xs">
+                    <span className="font-mono text-zinc-300 truncate max-w-[180px]">
+                      {device?.deviceName || deviceId.slice(0, 16)}
+                    </span>
+                    <span className="text-zinc-400">{count} sync</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* License usage */}
+        {licenseUsage.length > 0 && (
+          <div>
+            <h3 className="text-xs font-medium text-zinc-400 mb-2">Uzycie licencji</h3>
+            <div className="space-y-1.5">
+              {licenseUsage.map((lu) => {
+                const pct = lu.maxDevices > 0 ? Math.round((lu.deviceCount / lu.maxDevices) * 100) : 0;
+                return (
+                  <div key={lu.key} className="rounded border border-zinc-800 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="font-mono text-zinc-300">{lu.key}&hellip; <span className="text-zinc-500">({lu.plan})</span></span>
+                      <span className="text-zinc-400">{lu.deviceCount}/{lu.maxDevices} urz.</span>
+                    </div>
+                    <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${pct > 90 ? "bg-amber-500" : "bg-sky-500"}`}
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SyncHistorySection({ sessions }: { sessions: SyncSession[] }) {
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
@@ -594,62 +734,6 @@ function asyncPackageStatusBadge(status: AsyncPackageStatus): { label: string; c
     default:
       return { label: status, className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
   }
-}
-
-// ---------------------------------------------------------------------------
-// Section: Online Sync (snapshoty)
-// ---------------------------------------------------------------------------
-
-function OnlineSyncSection({ users }: { users: OnlineSyncUserSummary[] }) {
-  return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Online Sync — snapshoty</h2>
-        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          {users.length}
-        </span>
-      </div>
-      {users.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak danych online sync.</p>
-      ) : (
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-3 py-2">User ID</th>
-                <th className="px-3 py-2">Rewizja</th>
-                <th className="px-3 py-2">Hash</th>
-                <th className="px-3 py-2">Device</th>
-                <th className="px-3 py-2">Rozmiar</th>
-                <th className="px-3 py-2">Utworzono</th>
-                <th className="px-3 py-2">Ostatnia zmiana</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {users.map((u) => {
-                const sizeMb = (u.snapshotSizeBytes / (1024 * 1024)).toFixed(2);
-                const sizeKb = (u.snapshotSizeBytes / 1024).toFixed(1);
-                const sizeLabel = u.snapshotSizeBytes > 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`;
-                return (
-                  <tr key={u.userId}>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{u.userId}</td>
-                    <td className="px-3 py-3 text-zinc-200">{u.revision}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{u.payloadSha256.slice(0, 12)}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">
-                      {u.deviceId ? u.deviceId.slice(0, 12) : "\u2014"}
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">{sizeLabel}</td>
-                    <td className="px-3 py-3 text-zinc-300">{formatDate(u.createdAt)}</td>
-                    <td className="px-3 py-3 text-zinc-300">{formatDate(u.updatedAt)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
 }
 
 function AsyncPackagesSection({ packages }: { packages: AsyncDeltaPackage[] }) {
@@ -786,10 +870,10 @@ function DashboardView({
           </div>
         </header>
 
-        <OnlineSyncSection users={data.onlineSyncUsers} />
+        <SyncStatsSection sessions={data.sessions} devices={data.devices} groups={data.groups} licenses={data.licenses} />
         <ActiveSessionsSection sessions={data.activeSessions} />
         <LicensesSection licenses={data.licenses} groups={data.groups} />
-        <GroupsSection groups={data.groups} storageBackends={data.storageBackends} />
+        <GroupsSection groups={data.groups} storageBackends={data.storageBackends} licenses={data.licenses} />
         <StorageBackendsSection storageBackends={data.storageBackends} />
         <DevicesSection devices={data.devices} />
         <AsyncPackagesSection packages={data.asyncPackages} />

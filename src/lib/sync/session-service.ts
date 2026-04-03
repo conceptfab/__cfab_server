@@ -132,6 +132,11 @@ export async function handleSessionCreate(
     body.tableHashes,
   );
 
+  // Force full sync override (requested by client via tray menu)
+  if (body.forceFullSync && session.syncMode) {
+    session.syncMode = "full";
+  }
+
   if (role === "slave") {
     // Provision storage when session transitions to "negotiating"
     try {
@@ -267,6 +272,26 @@ export async function handleSessionReport(
       session.status = "failed";
       session.errorMessage = (body.details.error as string) ?? body.action;
     }
+    // Marker mismatch soft-check: compare master step 10 and slave step 12 markers
+    if (body.step === 12 && body.status === "ok") {
+      const masterStep10 = session.stepLog.find(
+        (l) => l.step === 10 && l.deviceId === session.masterDeviceId && l.status === "ok",
+      );
+      const slaveMarker = (body.details.marker as string) ?? null;
+      const masterMarker = (masterStep10?.details.marker as string) ?? null;
+      if (slaveMarker && masterMarker && slaveMarker !== masterMarker) {
+        session.stepLog.push({
+          step: 12,
+          phase: "verify",
+          action: "marker_mismatch_warning",
+          deviceId: "server",
+          timestamp: new Date().toISOString(),
+          details: { masterMarker, slaveMarker },
+          status: "warning",
+        });
+      }
+    }
+
     if (body.step >= 13 && body.status === "ok") {
       const devicesAtStep13 = new Set(
         session.stepLog.filter((l) => l.step >= 13 && l.status === "ok").map((l) => l.deviceId),
@@ -280,6 +305,35 @@ export async function handleSessionReport(
       session.status = "in_progress";
     }
   });
+
+  // Fire-and-forget: clean up session directory on storage when completed
+  if (updated.status === "completed" && updated.storageSessionPath) {
+    const sessionPath = updated.storageSessionPath;
+    const sessionId = updated.id;
+    const masterDeviceId = updated.masterDeviceId;
+    void (async () => {
+      try {
+        const { getDevice, getGroup } = await import("./license-store");
+        const device = await getDevice(masterDeviceId);
+        if (!device) return;
+        const group = await getGroup(device.groupId);
+        if (!group?.storageBackendId) return;
+        const backend = await getStorageBackend(group.storageBackendId);
+        if (!backend) return;
+        const adapter = createStorageAdapter(backend);
+        await adapter.deleteSessionDir(sessionId);
+        log("info", "session.cleanup.immediate", {
+          sessionId,
+          storagePath: sessionPath,
+        });
+      } catch (err) {
+        log("warn", "session.cleanup.immediate.failed", {
+          sessionId,
+          error: String(err),
+        });
+      }
+    })();
+  }
 
   return {
     ok: true,

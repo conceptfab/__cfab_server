@@ -1,10 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -91,5 +91,81 @@ model SyncEvent {
   @@index([createdAt], map: "sync_events_created_at_idx")
   @@index([userId, createdAt], map: "sync_events_user_id_created_at_idx")
   @@map("sync_events")
+}
+
+// ---------------------------------------------------------------------------
+// Online sync sessions (migrated from JSON file store)
+// ---------------------------------------------------------------------------
+
+model SyncSession {
+  id                     String   @id @default(cuid())
+  userId                 String   @map("user_id")
+  status                 String   @default("awaiting_peer") // SyncSessionStatus
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  expiresAt              DateTime @map("expires_at")
+  masterDeviceId         String   @map("master_device_id")
+  slaveDeviceId          String?  @map("slave_device_id")
+  syncMode               String?  @map("sync_mode") // "full" | "delta"
+  masterMarkerHash       String?  @map("master_marker_hash")
+  slaveMarkerHash        String?  @map("slave_marker_hash")
+  masterTableHashes      Json?    @map("master_table_hashes")
+  slaveTableHashes       Json?    @map("slave_table_hashes")
+  currentStep            Int      @default(0) @map("current_step")
+  stepLog                Json     @default("[]") @map("step_log") // SyncStepLog[]
+  storageSessionPath     String?  @map("storage_session_path")
+  storageCredentials     Json?    @map("storage_credentials")
+  storageCredentialsSentAt DateTime? @map("storage_credentials_sent_at")
+  resultMarkerHash       String?  @map("result_marker_hash")
+  completedAt            DateTime? @map("completed_at")
+  errorMessage           String?  @map("error_message")
+
+  historyEntries SyncHistoryEntry[]
+
+  @@index([userId, status], map: "sync_sessions_user_id_status_idx")
+  @@index([status, expiresAt], map: "sync_sessions_status_expires_idx")
+  @@map("sync_sessions")
+}
+
+model SyncHistoryEntry {
+  id               String   @id @default(cuid())
+  sessionId        String   @map("session_id")
+  masterDeviceId   String   @map("master_device_id")
+  slaveDeviceId    String?  @map("slave_device_id")
+  syncMode         String?  @map("sync_mode")
+  resultMarkerHash String?  @map("result_marker_hash")
+  startedAt        DateTime @map("started_at")
+  completedAt      DateTime @map("completed_at")
+  durationMs       Int      @map("duration_ms")
+  status           String   // "completed" | "failed"
+  errorMessage     String?  @map("error_message")
+  stepCount        Int      @map("step_count")
+
+  session SyncSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "sync_history_session_id_idx")
+  @@index([completedAt], map: "sync_history_completed_at_idx")
+  @@map("sync_history_entries")
+}
+
+model AsyncDeltaPackage {
+  id                 String   @id @default(cuid())
+  groupId            String   @map("group_id")
+  fromDeviceId       String   @map("from_device_id")
+  toGroupDevices     Boolean  @default(true) @map("to_group_devices")
+  baseMarkerHash     String?  @map("base_marker_hash")
+  newMarkerHash      String   @map("new_marker_hash")
+  storagePath        String   @map("storage_path")
+  storageBackendId   String?  @map("storage_backend_id")
+  status             String   @default("pending") // AsyncPackageStatus
+  fileSizeBytes      Int      @map("file_size_bytes")
+  createdAt          DateTime @default(now()) @map("created_at")
+  expiresAt          DateTime @map("expires_at")
+  deliveredAt        DateTime? @map("delivered_at")
+  deliveredToDeviceId String? @map("delivered_to_device_id")
+
+  @@index([groupId, status], map: "async_packages_group_status_idx")
+  @@index([status, expiresAt], map: "async_packages_status_expires_idx")
+  @@map("async_delta_packages")
 }
 

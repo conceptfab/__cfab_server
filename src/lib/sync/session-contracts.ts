@@ -166,6 +166,7 @@ export interface SessionCreateBody {
   deviceId: string;
   markerHash: string | null;
   tableHashes: TableHashes | null;
+  forceFullSync?: boolean;
 }
 
 export interface SessionCreateResponse {

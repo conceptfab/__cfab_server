@@ -2,7 +2,6 @@ import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig } f
 import type { SyncSession, AsyncDeltaPackage } from "./session-contracts";
 import { getAllLicenses, getAllGroups, getAllStorageBackends } from "./license-store";
 import { getAllSessions, getAllAsyncPackages } from "./session-store";
-import { getAllOnlineSyncUsers, type OnlineSyncUserSummary } from "./online-sync-repository";
 
 export interface DashboardData {
   licenses: License[];
@@ -13,17 +12,15 @@ export interface DashboardData {
   activeSessions: SyncSession[];
   completedSessions: SyncSession[];
   asyncPackages: AsyncDeltaPackage[];
-  onlineSyncUsers: OnlineSyncUserSummary[];
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const [licenses, groups, storageBackends, sessions, asyncPackages, onlineSyncUsers] = await Promise.all([
+  const [licenses, groups, storageBackends, sessions, asyncPackages] = await Promise.all([
     getAllLicenses(),
     getAllGroups(),
     getAllStorageBackends(),
     getAllSessions(),
     getAllAsyncPackages(),
-    getAllOnlineSyncUsers(),
   ]);
 
   // Collect all devices from all licenses
@@ -49,6 +46,5 @@ export async function getDashboardData(): Promise<DashboardData> {
     activeSessions,
     completedSessions,
     asyncPackages,
-    onlineSyncUsers,
   };
 }

@@ -1,21 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 
+import { prisma } from "@/lib/db";
 import type { TableHashes } from "@/lib/sync/contracts";
 import type {
   AsyncDeltaPackage,
-  SessionStoreFile,
   StorageCredentials,
   SyncHistoryEntry,
   SyncSession,
   SyncSessionStatus,
   SyncStepLog,
 } from "@/lib/sync/session-contracts";
-
-const DATA_DIR =
-  process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
-const STORE_FILE = path.join(DATA_DIR, "session-store.json");
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const HEARTBEAT_SLIDE_MS = 2 * 60 * 1000; // 2 minutes
@@ -34,78 +28,78 @@ export function stepToPhase(step: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// File I/O helpers
+// Prisma ↔ domain mappers
 // ---------------------------------------------------------------------------
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function emptyStore(): SessionStoreFile {
-  return { version: 1, sessions: {}, asyncPackages: {}, syncHistory: [] };
+// biome-ignore lint: any needed for Prisma JSON fields
+function dbToSession(row: any): SyncSession {
+  return {
+    id: row.id,
+    userId: row.userId,
+    status: row.status as SyncSessionStatus,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+    expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
+    masterDeviceId: row.masterDeviceId,
+    slaveDeviceId: row.slaveDeviceId,
+    syncMode: row.syncMode,
+    masterMarkerHash: row.masterMarkerHash,
+    slaveMarkerHash: row.slaveMarkerHash,
+    masterTableHashes: row.masterTableHashes as TableHashes | null,
+    slaveTableHashes: row.slaveTableHashes as TableHashes | null,
+    currentStep: row.currentStep,
+    stepLog: (row.stepLog ?? []) as SyncStepLog[],
+    storageSessionPath: row.storageSessionPath,
+    storageCredentials: row.storageCredentials as StorageCredentials | null,
+    storageCredentialsSentAt: row.storageCredentialsSentAt instanceof Date
+      ? row.storageCredentialsSentAt.toISOString()
+      : row.storageCredentialsSentAt,
+    resultMarkerHash: row.resultMarkerHash,
+    completedAt: row.completedAt instanceof Date ? row.completedAt.toISOString() : row.completedAt,
+    errorMessage: row.errorMessage,
+  };
 }
 
-async function ensureDataDir(): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
+// biome-ignore lint: any needed for Prisma JSON fields
+function dbToHistory(row: any): SyncHistoryEntry {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    masterDeviceId: row.masterDeviceId,
+    slaveDeviceId: row.slaveDeviceId,
+    syncMode: row.syncMode,
+    resultMarkerHash: row.resultMarkerHash,
+    startedAt: row.startedAt instanceof Date ? row.startedAt.toISOString() : row.startedAt,
+    completedAt: row.completedAt instanceof Date ? row.completedAt.toISOString() : row.completedAt,
+    durationMs: row.durationMs,
+    status: row.status as "completed" | "failed",
+    errorMessage: row.errorMessage,
+    stepCount: row.stepCount,
+  };
 }
 
-async function readStore(): Promise<SessionStoreFile> {
-  try {
-    const raw = await readFile(STORE_FILE, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "version" in parsed &&
-      "sessions" in parsed
-    ) {
-      const store = parsed as SessionStoreFile;
-      // Backfill for older store files
-      if (!store.asyncPackages) {
-        store.asyncPackages = {};
-      }
-      if (!store.syncHistory) {
-        store.syncHistory = [];
-      }
-      return store;
-    }
-    return emptyStore();
-  } catch (error: unknown) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return emptyStore();
-    }
-    throw error;
-  }
-}
-
-async function writeStore(store: SessionStoreFile): Promise<void> {
-  await ensureDataDir();
-  await writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf8");
-}
-
-// ---------------------------------------------------------------------------
-// Mutex (same pattern as repository.ts)
-// ---------------------------------------------------------------------------
-
-let mutex: Promise<void> = Promise.resolve();
-
-async function withMutex<T>(work: () => Promise<T>): Promise<T> {
-  const previous = mutex;
-  let release: () => void = () => {};
-  mutex = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await work();
-  } finally {
-    release();
-  }
+// biome-ignore lint: any needed for Prisma JSON fields
+function dbToAsyncPackage(row: any): AsyncDeltaPackage {
+  return {
+    id: row.id,
+    groupId: row.groupId,
+    fromDeviceId: row.fromDeviceId,
+    toGroupDevices: row.toGroupDevices,
+    baseMarkerHash: row.baseMarkerHash,
+    newMarkerHash: row.newMarkerHash,
+    storagePath: row.storagePath,
+    storageBackendId: row.storageBackendId,
+    status: row.status as AsyncDeltaPackage["status"],
+    fileSizeBytes: row.fileSizeBytes,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
+    deliveredAt: row.deliveredAt instanceof Date ? row.deliveredAt.toISOString() : row.deliveredAt,
+    deliveredToDeviceId: row.deliveredToDeviceId,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,56 +112,36 @@ export async function createSession(
   markerHash: string | null,
   tableHashes: TableHashes | null,
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const now = nowIso();
-    const session: SyncSession = {
+  const now = new Date();
+  const row = await prisma.syncSession.create({
+    data: {
       id: randomUUID(),
       userId,
       status: "awaiting_peer",
-      createdAt: now,
-      updatedAt: now,
-      expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
       masterDeviceId: deviceId,
-      slaveDeviceId: null,
-      syncMode: null,
       masterMarkerHash: markerHash,
-      slaveMarkerHash: null,
-      masterTableHashes: tableHashes,
-      slaveTableHashes: null,
+      masterTableHashes: tableHashes as any,
       currentStep: 0,
       stepLog: [],
-      storageSessionPath: null,
-      storageCredentials: null,
-      storageCredentialsSentAt: null,
-      resultMarkerHash: null,
-      completedAt: null,
-      errorMessage: null,
-    };
-    store.sessions[session.id] = session;
-    await writeStore(store);
-    return session;
+    },
   });
+  return dbToSession(row);
 }
 
 export async function findAwaitingSession(
   userId: string,
   excludeDeviceId: string,
 ): Promise<SyncSession | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    for (const session of Object.values(store.sessions)) {
-      if (
-        session.userId === userId &&
-        session.status === "awaiting_peer" &&
-        session.masterDeviceId !== excludeDeviceId &&
-        new Date(session.expiresAt).getTime() > Date.now()
-      ) {
-        return session;
-      }
-    }
-    return null;
+  const row = await prisma.syncSession.findFirst({
+    where: {
+      userId,
+      status: "awaiting_peer",
+      masterDeviceId: { not: excludeDeviceId },
+      expiresAt: { gt: new Date() },
+    },
   });
+  return row ? dbToSession(row) : null;
 }
 
 export async function joinSession(
@@ -176,34 +150,26 @@ export async function joinSession(
   slaveMarkerHash: string | null,
   slaveTableHashes: TableHashes | null,
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-    if (session.status !== "awaiting_peer") {
-      throw new Error(`Session ${sessionId} is not awaiting peer (status: ${session.status})`);
-    }
+  const session = await prisma.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
+  if (session.status !== "awaiting_peer") {
+    throw new Error(`Session ${sessionId} is not awaiting peer (status: ${session.status})`);
+  }
 
-    session.slaveDeviceId = slaveDeviceId;
-    session.slaveMarkerHash = slaveMarkerHash;
-    session.slaveTableHashes = slaveTableHashes;
-    session.status = "negotiating";
-    session.updatedAt = nowIso();
+  const syncMode = session.masterMarkerHash && slaveMarkerHash && session.masterMarkerHash === slaveMarkerHash
+    ? "delta"
+    : "full";
 
-    // Determine sync mode: delta if both markers match, full otherwise
-    if (
-      session.masterMarkerHash &&
-      slaveMarkerHash &&
-      session.masterMarkerHash === slaveMarkerHash
-    ) {
-      session.syncMode = "delta";
-    } else {
-      session.syncMode = "full";
-    }
-
-    await writeStore(store);
-    return session;
+  const row = await prisma.syncSession.update({
+    where: { id: sessionId },
+    data: {
+      slaveDeviceId,
+      slaveMarkerHash,
+      slaveTableHashes: slaveTableHashes as any,
+      status: "negotiating",
+      syncMode,
+    },
   });
+  return dbToSession(row);
 }
 
 // C1: Atomic find-and-join-or-create to prevent race conditions in session pairing
@@ -213,105 +179,86 @@ export async function findAndJoinOrCreate(
   markerHash: string | null,
   tableHashes: TableHashes | null,
 ): Promise<{ session: SyncSession; role: "master" | "slave" }> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const now = Date.now();
-
+  // Use a transaction for atomicity
+  return prisma.$transaction(async (tx) => {
     // Find existing awaiting session for this user (different device)
-    for (const session of Object.values(store.sessions)) {
-      if (
-        session.userId === userId &&
-        session.status === "awaiting_peer" &&
-        session.masterDeviceId !== deviceId &&
-        new Date(session.expiresAt).getTime() > now
-      ) {
-        // Join as slave
-        const ts = nowIso();
-        session.slaveDeviceId = deviceId;
-        session.slaveMarkerHash = markerHash;
-        session.slaveTableHashes = tableHashes;
-        session.status = "negotiating";
-        session.currentStep = 2;
-        session.updatedAt = ts;
+    const existing = await tx.syncSession.findFirst({
+      where: {
+        userId,
+        status: "awaiting_peer",
+        masterDeviceId: { not: deviceId },
+        expiresAt: { gt: new Date() },
+      },
+    });
 
-        if (
-          session.masterMarkerHash &&
-          markerHash &&
-          session.masterMarkerHash === markerHash
-        ) {
-          session.syncMode = "delta";
-        } else {
-          session.syncMode = "full";
-        }
+    if (existing) {
+      const syncMode = existing.masterMarkerHash && markerHash && existing.masterMarkerHash === markerHash
+        ? "delta"
+        : "full";
+      const ts = nowIso();
+      const stepLog = (existing.stepLog as unknown as SyncStepLog[] ?? []);
+      stepLog.push({
+        step: 2,
+        phase: "discovery",
+        action: "slave_joined",
+        deviceId,
+        timestamp: ts,
+        details: { slaveMarkerHash: markerHash, syncMode },
+        status: "ok",
+      });
 
-        session.stepLog.push({
-          step: 2,
-          phase: "discovery",
-          action: "slave_joined",
-          deviceId,
-          timestamp: ts,
-          details: { slaveMarkerHash: markerHash, syncMode: session.syncMode },
-          status: "ok",
-        });
-
-        await writeStore(store);
-        return { session, role: "slave" as const };
-      }
+      const row = await tx.syncSession.update({
+        where: { id: existing.id },
+        data: {
+          slaveDeviceId: deviceId,
+          slaveMarkerHash: markerHash,
+          slaveTableHashes: tableHashes as any,
+          status: "negotiating",
+          currentStep: 2,
+          syncMode,
+          stepLog: stepLog as any,
+        },
+      });
+      return { session: dbToSession(row), role: "slave" as const };
     }
 
     // Create new session as master
     const ts = nowIso();
-    const newSession: SyncSession = {
-      id: randomUUID(),
-      userId,
-      status: "awaiting_peer",
-      createdAt: ts,
-      updatedAt: ts,
-      expiresAt: new Date(now + SESSION_TTL_MS).toISOString(),
-      masterDeviceId: deviceId,
-      slaveDeviceId: null,
-      syncMode: null,
-      masterMarkerHash: markerHash,
-      slaveMarkerHash: null,
-      masterTableHashes: tableHashes,
-      slaveTableHashes: null,
-      currentStep: 1,
-      stepLog: [
-        {
-          step: 1,
-          phase: "discovery",
-          action: "session_created",
-          deviceId,
-          timestamp: ts,
-          details: { markerHash },
-          status: "ok",
-        },
-      ],
-      storageSessionPath: null,
-      storageCredentials: null,
-      storageCredentialsSentAt: null,
-      resultMarkerHash: null,
-      completedAt: null,
-      errorMessage: null,
-    };
-    store.sessions[newSession.id] = newSession;
-    await writeStore(store);
-    return { session: newSession, role: "master" as const };
+    const row = await tx.syncSession.create({
+      data: {
+        id: randomUUID(),
+        userId,
+        status: "awaiting_peer",
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+        masterDeviceId: deviceId,
+        masterMarkerHash: markerHash,
+        masterTableHashes: tableHashes as any,
+        currentStep: 1,
+        stepLog: [
+          {
+            step: 1,
+            phase: "discovery",
+            action: "session_created",
+            deviceId,
+            timestamp: ts,
+            details: { markerHash },
+            status: "ok",
+          },
+        ] as any,
+      },
+    });
+    return { session: dbToSession(row), role: "master" as const };
   });
 }
 
 export async function getAllSessions(): Promise<SyncSession[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.sessions);
-  });
+  const rows = await prisma.syncSession.findMany();
+  return rows.map(dbToSession);
 }
 
 export async function getSession(sessionId: string): Promise<SyncSession | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.sessions[sessionId] ?? null;
-  });
+  const row = await prisma.syncSession.findUnique({ where: { id: sessionId } });
+  return row ? dbToSession(row) : null;
 }
 
 export async function reportStep(
@@ -322,21 +269,20 @@ export async function reportStep(
   details: Record<string, unknown>,
   status: "ok" | "error" | "warning",
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
 
     // C2: Ignore reports to terminal sessions
-    if (TERMINAL_STATES.includes(session.status)) {
-      return session;
+    if (TERMINAL_STATES.includes(session.status as SyncSessionStatus)) {
+      return dbToSession(session);
     }
 
     // I6: Validate step range
     if (step < 1 || step > 13) {
-      return session;
+      return dbToSession(session);
     }
 
+    const stepLog = (session.stepLog as unknown as SyncStepLog[] ?? []);
     const logEntry: SyncStepLog = {
       step,
       phase: stepToPhase(step),
@@ -346,41 +292,41 @@ export async function reportStep(
       details,
       status,
     };
-    session.stepLog.push(logEntry);
+    stepLog.push(logEntry);
 
-    if (step > session.currentStep) {
-      session.currentStep = step;
-    }
-    session.updatedAt = nowIso();
+    const newStep = Math.max(session.currentStep, step);
+    let newStatus = session.status;
+    let errorMessage = session.errorMessage;
+    let completedAt = session.completedAt;
 
     // Handle error status
     if (status === "error") {
-      session.status = "failed";
-      session.errorMessage = details.error as string ?? action;
+      newStatus = "failed";
+      errorMessage = (details.error as string) ?? action;
 
       // Record failed session in history
-      const startTime = new Date(session.createdAt).getTime();
-      const historyEntry: SyncHistoryEntry = {
-        id: randomUUID(),
-        sessionId: session.id,
-        masterDeviceId: session.masterDeviceId,
-        slaveDeviceId: session.slaveDeviceId,
-        syncMode: session.syncMode,
-        resultMarkerHash: null,
-        startedAt: session.createdAt,
-        completedAt: nowIso(),
-        durationMs: Date.now() - startTime,
-        status: "failed",
-        errorMessage: session.errorMessage,
-        stepCount: session.stepLog.length,
-      };
-      store.syncHistory!.push(historyEntry);
+      await tx.syncHistoryEntry.create({
+        data: {
+          id: randomUUID(),
+          sessionId: session.id,
+          masterDeviceId: session.masterDeviceId,
+          slaveDeviceId: session.slaveDeviceId,
+          syncMode: session.syncMode,
+          resultMarkerHash: null,
+          startedAt: session.createdAt,
+          completedAt: new Date(),
+          durationMs: Date.now() - session.createdAt.getTime(),
+          status: "failed",
+          errorMessage,
+          stepCount: stepLog.length,
+        },
+      });
     }
 
     // Completion detection: both devices reported step 13
     if (step >= 13 && status === "ok") {
       const devicesAtStep13 = new Set(
-        session.stepLog
+        stepLog
           .filter((log) => log.step >= 13 && log.status === "ok")
           .map((log) => log.deviceId),
       );
@@ -390,37 +336,44 @@ export async function reportStep(
         : false;
 
       if (masterReported && slaveReported) {
-        session.status = "completed";
-        session.completedAt = nowIso();
+        newStatus = "completed";
+        completedAt = new Date();
 
-        // Record sync history entry
-        const startTime = new Date(session.createdAt).getTime();
-        const endTime = Date.now();
-        const historyEntry: SyncHistoryEntry = {
-          id: randomUUID(),
-          sessionId: session.id,
-          masterDeviceId: session.masterDeviceId,
-          slaveDeviceId: session.slaveDeviceId,
-          syncMode: session.syncMode,
-          resultMarkerHash: session.resultMarkerHash,
-          startedAt: session.createdAt,
-          completedAt: session.completedAt!,
-          durationMs: endTime - startTime,
-          status: "completed",
-          errorMessage: null,
-          stepCount: session.stepLog.length,
-        };
-        store.syncHistory!.push(historyEntry);
+        await tx.syncHistoryEntry.create({
+          data: {
+            id: randomUUID(),
+            sessionId: session.id,
+            masterDeviceId: session.masterDeviceId,
+            slaveDeviceId: session.slaveDeviceId,
+            syncMode: session.syncMode,
+            resultMarkerHash: session.resultMarkerHash,
+            startedAt: session.createdAt,
+            completedAt,
+            durationMs: completedAt.getTime() - session.createdAt.getTime(),
+            status: "completed",
+            errorMessage: null,
+            stepCount: stepLog.length,
+          },
+        });
       }
     }
 
     // Move to in_progress if still negotiating and step > 0
-    if (session.status === "negotiating" && step > 0 && status === "ok") {
-      session.status = "in_progress";
+    if (newStatus === "negotiating" && step > 0 && status === "ok") {
+      newStatus = "in_progress";
     }
 
-    await writeStore(store);
-    return session;
+    const row = await tx.syncSession.update({
+      where: { id: sessionId },
+      data: {
+        stepLog: stepLog as any,
+        currentStep: newStep,
+        status: newStatus,
+        errorMessage,
+        completedAt,
+      },
+    });
+    return dbToSession(row);
   });
 }
 
@@ -428,25 +381,23 @@ export async function heartbeat(
   sessionId: string,
   _deviceId: string,
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
 
     // C2: Ignore heartbeats to terminal sessions
-    if (TERMINAL_STATES.includes(session.status)) {
-      return session;
+    if (TERMINAL_STATES.includes(session.status as SyncSessionStatus)) {
+      return dbToSession(session);
     }
 
     // I3: Only extend TTL, never reduce it
-    const newExpiry = new Date(Date.now() + HEARTBEAT_SLIDE_MS).toISOString();
-    if (new Date(newExpiry).getTime() > new Date(session.expiresAt).getTime()) {
-      session.expiresAt = newExpiry;
-    }
-    session.updatedAt = nowIso();
-
-    await writeStore(store);
-    return session;
+    const newExpiry = new Date(Date.now() + HEARTBEAT_SLIDE_MS);
+    const row = await tx.syncSession.update({
+      where: { id: sessionId },
+      data: {
+        expiresAt: newExpiry > session.expiresAt ? newExpiry : session.expiresAt,
+      },
+    });
+    return dbToSession(row);
   });
 }
 
@@ -455,110 +406,86 @@ export async function cancelSession(
   _deviceId: string,
   reason?: string,
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
 
     // C2: Ignore cancellation of terminal sessions
-    if (TERMINAL_STATES.includes(session.status)) {
-      return session;
+    if (TERMINAL_STATES.includes(session.status as SyncSessionStatus)) {
+      return dbToSession(session);
     }
 
-    session.status = "cancelled";
-    session.updatedAt = nowIso();
-    if (reason) {
-      session.errorMessage = reason;
-    }
-
-    await writeStore(store);
-    return session;
+    const row = await tx.syncSession.update({
+      where: { id: sessionId },
+      data: {
+        status: "cancelled",
+        errorMessage: reason ?? session.errorMessage,
+      },
+    });
+    return dbToSession(row);
   });
 }
 
 export async function expireSessions(): Promise<number> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const now = Date.now();
-    let count = 0;
-
-    for (const session of Object.values(store.sessions)) {
-      if (
-        (session.status === "awaiting_peer" ||
-          session.status === "negotiating" ||
-          session.status === "in_progress") &&
-        new Date(session.expiresAt).getTime() <= now
-      ) {
-        session.status = "expired";
-        session.updatedAt = nowIso();
-        count++;
-      }
-    }
-
-    if (count > 0) {
-      await writeStore(store);
-    }
-    return count;
+  const result = await prisma.syncSession.updateMany({
+    where: {
+      status: { in: ["awaiting_peer", "negotiating", "in_progress"] },
+      expiresAt: { lte: new Date() },
+    },
+    data: { status: "expired" },
   });
+  return result.count;
 }
 
 export async function cleanupOldSessions(maxAgeMs: number): Promise<number> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const cutoff = Date.now() - maxAgeMs;
-    const terminalStatuses: SyncSessionStatus[] = [
-      "completed",
-      "failed",
-      "expired",
-      "cancelled",
-    ];
-    let count = 0;
-
-    for (const [id, session] of Object.entries(store.sessions)) {
-      if (
-        terminalStatuses.includes(session.status) &&
-        new Date(session.updatedAt).getTime() < cutoff
-      ) {
-        delete store.sessions[id];
-        count++;
-      }
-    }
-
-    if (count > 0) {
-      await writeStore(store);
-    }
-    return count;
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const result = await prisma.syncSession.deleteMany({
+    where: {
+      status: { in: ["completed", "failed", "expired", "cancelled"] },
+      updatedAt: { lt: cutoff },
+    },
   });
+  return result.count;
 }
 
 // ---------------------------------------------------------------------------
 // Atomic get + validate ownership + action
 // ---------------------------------------------------------------------------
 
-/**
- * Atomically: read store → validate session ownership → perform action → write store.
- * The action callback receives the validated session and must mutate it in place.
- * The store is written back after the action completes.
- */
 export async function withValidatedSession(
   sessionId: string,
   userId: string,
   deviceId: string,
   action: (session: SyncSession) => void,
 ): Promise<SyncSession> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-    if (session.userId !== userId) {
+  return prisma.$transaction(async (tx) => {
+    const row = await tx.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
+    if (row.userId !== userId) {
       throw new Error("Session does not belong to this user");
     }
-    if (session.masterDeviceId !== deviceId && session.slaveDeviceId !== deviceId) {
+    if (row.masterDeviceId !== deviceId && row.slaveDeviceId !== deviceId) {
       throw new Error("Device is not part of this session");
     }
+
+    const session = dbToSession(row);
     action(session);
-    await writeStore(store);
-    return session;
+
+    // Write back the mutated session
+    const updated = await tx.syncSession.update({
+      where: { id: sessionId },
+      data: {
+        status: session.status,
+        syncMode: session.syncMode,
+        currentStep: session.currentStep,
+        stepLog: session.stepLog as any,
+        storageSessionPath: session.storageSessionPath,
+        storageCredentials: session.storageCredentials as any,
+        storageCredentialsSentAt: session.storageCredentialsSentAt ? new Date(session.storageCredentialsSentAt) : null,
+        resultMarkerHash: session.resultMarkerHash,
+        completedAt: session.completedAt ? new Date(session.completedAt) : null,
+        errorMessage: session.errorMessage,
+      },
+    });
+    return dbToSession(updated);
   });
 }
 
@@ -571,38 +498,37 @@ export async function updateSessionStorage(
   storagePath: string,
   credentials: StorageCredentials,
 ): Promise<void> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const session = store.sessions[sessionId];
-    if (!session) return;
-    session.storageSessionPath = storagePath;
-    session.storageCredentials = credentials;
-    session.storageCredentialsSentAt = new Date().toISOString();
-    session.updatedAt = new Date().toISOString();
-    await writeStore(store);
+  await prisma.syncSession.update({
+    where: { id: sessionId },
+    data: {
+      storageSessionPath: storagePath,
+      storageCredentials: credentials as any,
+      storageCredentialsSentAt: new Date(),
+    },
   });
 }
 
 /** Get IDs of sessions in terminal state that have a storageSessionPath */
 export async function getCompletedSessionIds(): Promise<string[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const terminal = ["completed", "failed", "expired", "cancelled"];
-    return Object.values(store.sessions)
-      .filter((s) => terminal.includes(s.status) && s.storageSessionPath)
-      .map((s) => s.id);
+  const rows = await prisma.syncSession.findMany({
+    where: {
+      status: { in: ["completed", "failed", "expired", "cancelled"] },
+      storageSessionPath: { not: null },
+    },
+    select: { id: true },
   });
+  return rows.map((r) => r.id);
 }
 
 /** Get IDs of sessions in active (non-terminal) state */
 export async function getActiveSessionIds(): Promise<string[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const terminal = ["completed", "failed", "expired", "cancelled"];
-    return Object.values(store.sessions)
-      .filter((s) => !terminal.includes(s.status))
-      .map((s) => s.id);
+  const rows = await prisma.syncSession.findMany({
+    where: {
+      status: { notIn: ["completed", "failed", "expired", "cancelled"] },
+    },
+    select: { id: true },
   });
+  return rows.map((r) => r.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -612,44 +538,50 @@ export async function getActiveSessionIds(): Promise<string[]> {
 export async function createAsyncPackage(
   pkg: AsyncDeltaPackage,
 ): Promise<void> {
-  return withMutex(async () => {
-    const store = await readStore();
-    store.asyncPackages![pkg.id] = pkg;
-    await writeStore(store);
+  await prisma.asyncDeltaPackage.create({
+    data: {
+      id: pkg.id,
+      groupId: pkg.groupId,
+      fromDeviceId: pkg.fromDeviceId,
+      toGroupDevices: pkg.toGroupDevices,
+      baseMarkerHash: pkg.baseMarkerHash,
+      newMarkerHash: pkg.newMarkerHash,
+      storagePath: pkg.storagePath,
+      storageBackendId: pkg.storageBackendId,
+      status: pkg.status,
+      fileSizeBytes: pkg.fileSizeBytes,
+      expiresAt: new Date(pkg.expiresAt),
+      deliveredAt: pkg.deliveredAt ? new Date(pkg.deliveredAt) : null,
+      deliveredToDeviceId: pkg.deliveredToDeviceId,
+    },
   });
 }
 
 export async function getAsyncPackage(
   packageId: string,
 ): Promise<AsyncDeltaPackage | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.asyncPackages?.[packageId] ?? null;
-  });
+  const row = await prisma.asyncDeltaPackage.findUnique({ where: { id: packageId } });
+  return row ? dbToAsyncPackage(row) : null;
 }
 
 export async function getAllAsyncPackages(): Promise<AsyncDeltaPackage[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.asyncPackages ?? {});
-  });
+  const rows = await prisma.asyncDeltaPackage.findMany();
+  return rows.map(dbToAsyncPackage);
 }
 
 export async function getPendingPackagesForGroup(
   groupId: string,
   excludeDeviceId: string,
 ): Promise<AsyncDeltaPackage[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const now = Date.now();
-    return Object.values(store.asyncPackages ?? {}).filter(
-      (p) =>
-        p.groupId === groupId &&
-        p.status === "pending" &&
-        p.fromDeviceId !== excludeDeviceId &&
-        new Date(p.expiresAt).getTime() > now,
-    );
+  const rows = await prisma.asyncDeltaPackage.findMany({
+    where: {
+      groupId,
+      status: "pending",
+      fromDeviceId: { not: excludeDeviceId },
+      expiresAt: { gt: new Date() },
+    },
   });
+  return rows.map(dbToAsyncPackage);
 }
 
 export async function updateAsyncPackageStatus(
@@ -657,70 +589,53 @@ export async function updateAsyncPackageStatus(
   status: AsyncDeltaPackage["status"],
   extra?: { deliveredToDeviceId?: string },
 ): Promise<AsyncDeltaPackage | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const pkg = store.asyncPackages?.[packageId];
-    if (!pkg) return null;
-    pkg.status = status;
-    if (status === "delivered") {
-      pkg.deliveredAt = nowIso();
-      if (extra?.deliveredToDeviceId) {
-        pkg.deliveredToDeviceId = extra.deliveredToDeviceId;
-      }
-    }
-    await writeStore(store);
-    return pkg;
-  });
+  try {
+    const row = await prisma.asyncDeltaPackage.update({
+      where: { id: packageId },
+      data: {
+        status,
+        deliveredAt: status === "delivered" ? new Date() : undefined,
+        deliveredToDeviceId: status === "delivered" ? extra?.deliveredToDeviceId : undefined,
+      },
+    });
+    return dbToAsyncPackage(row);
+  } catch {
+    return null;
+  }
 }
 
 export async function expireAsyncPackages(): Promise<number> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const now = Date.now();
-    let count = 0;
-    for (const pkg of Object.values(store.asyncPackages ?? {})) {
-      if (
-        pkg.status === "pending" &&
-        new Date(pkg.expiresAt).getTime() <= now
-      ) {
-        pkg.status = "expired";
-        count++;
-      }
-    }
-    if (count > 0) await writeStore(store);
-    return count;
+  const result = await prisma.asyncDeltaPackage.updateMany({
+    where: {
+      status: "pending",
+      expiresAt: { lte: new Date() },
+    },
+    data: { status: "expired" },
   });
+  return result.count;
 }
 
 export async function cleanupOldAsyncPackages(maxAgeMs: number): Promise<number> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const cutoff = Date.now() - maxAgeMs;
-    const terminal: AsyncDeltaPackage["status"][] = ["delivered", "rejected", "expired"];
-    let count = 0;
-    for (const [id, pkg] of Object.entries(store.asyncPackages ?? {})) {
-      if (
-        terminal.includes(pkg.status) &&
-        new Date(pkg.createdAt).getTime() < cutoff
-      ) {
-        delete store.asyncPackages![id];
-        count++;
-      }
-    }
-    if (count > 0) await writeStore(store);
-    return count;
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const result = await prisma.asyncDeltaPackage.deleteMany({
+    where: {
+      status: { in: ["delivered", "rejected", "expired"] },
+      createdAt: { lt: cutoff },
+    },
   });
+  return result.count;
 }
 
 /** Get expired/delivered/rejected async packages that still have storage paths */
 export async function getCleanableAsyncPackageIds(): Promise<{ id: string; storagePath: string }[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const terminal: AsyncDeltaPackage["status"][] = ["delivered", "rejected", "expired"];
-    return Object.values(store.asyncPackages ?? {})
-      .filter((p) => terminal.includes(p.status) && p.storagePath)
-      .map((p) => ({ id: p.id, storagePath: p.storagePath }));
+  const rows = await prisma.asyncDeltaPackage.findMany({
+    where: {
+      status: { in: ["delivered", "rejected", "expired"] },
+      storagePath: { not: "" },
+    },
+    select: { id: true, storagePath: true },
   });
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -731,25 +646,22 @@ export async function getSyncHistory(
   limit = 50,
   offset = 0,
 ): Promise<{ entries: SyncHistoryEntry[]; total: number }> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const history = store.syncHistory ?? [];
-    // Sort newest first
-    const sorted = [...history].sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-    return {
-      entries: sorted.slice(offset, offset + limit),
-      total: sorted.length,
-    };
-  });
+  const [rows, total] = await Promise.all([
+    prisma.syncHistoryEntry.findMany({
+      orderBy: { completedAt: "desc" },
+      skip: offset,
+      take: limit,
+    }),
+    prisma.syncHistoryEntry.count(),
+  ]);
+  return { entries: rows.map(dbToHistory), total };
 }
 
 export async function getSyncHistoryEntry(
   entryId: string,
 ): Promise<SyncHistoryEntry | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return (store.syncHistory ?? []).find((e) => e.id === entryId) ?? null;
-  });
+  const row = await prisma.syncHistoryEntry.findUnique({ where: { id: entryId } });
+  return row ? dbToHistory(row) : null;
 }
 
 export async function getSyncHistoryForUser(
@@ -757,22 +669,16 @@ export async function getSyncHistoryForUser(
   limit = 50,
   offset = 0,
 ): Promise<{ entries: SyncHistoryEntry[]; total: number }> {
-  return withMutex(async () => {
-    const store = await readStore();
-    // To filter by user, we need to look up the session's userId
-    // For now, filter by checking sessions that belong to this user
-    const userSessionIds = new Set(
-      Object.values(store.sessions)
-        .filter((s) => s.userId === userId)
-        .map((s) => s.id),
-    );
-    const history = (store.syncHistory ?? []).filter((e) =>
-      userSessionIds.has(e.sessionId),
-    );
-    const sorted = [...history].sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-    return {
-      entries: sorted.slice(offset, offset + limit),
-      total: sorted.length,
-    };
-  });
+  const [rows, total] = await Promise.all([
+    prisma.syncHistoryEntry.findMany({
+      where: { session: { userId } },
+      orderBy: { completedAt: "desc" },
+      skip: offset,
+      take: limit,
+    }),
+    prisma.syncHistoryEntry.count({
+      where: { session: { userId } },
+    }),
+  ]);
+  return { entries: rows.map(dbToHistory), total };
 }
