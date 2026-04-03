@@ -122,6 +122,7 @@ export interface DeltaPushResponse {
   ok: true;
   accepted: boolean;
   revision: number;
+  snapshotHash: string | null;
   serverTableHashes: TableHashes;
   reason: string;
 }
@@ -478,6 +479,7 @@ export async function handleDeltaPush(
       ok: true,
       accepted: true,
       revision: currentRevision,
+      snapshotHash: meta?.payloadSha256 ?? null,
       serverTableHashes: body.tableHashes,
       reason: "noop_empty_delta",
     };
@@ -558,6 +560,33 @@ export async function handleDeltaPush(
 
   const archiveStr = JSON.stringify(snapshot);
   const hash = sha256(archiveStr);
+  const previousHash = meta?.payloadSha256 ?? null;
+
+  // If snapshot hash didn't change after merge, it's a noop — don't bump revision
+  if (previousHash && hash === previousHash) {
+    log("info", "direct-sync.delta-push.noop-same-hash", {
+      userId,
+      deviceId: body.deviceId,
+      revision: currentRevision,
+      hash: hash.substring(0, 12),
+    });
+
+    // Update tableHashes in meta even if snapshot didn't change
+    if (meta) {
+      meta.tableHashes = body.tableHashes;
+      await writeJson(path.join(dir, "meta.json"), meta);
+    }
+
+    return {
+      ok: true,
+      accepted: true,
+      revision: currentRevision,
+      snapshotHash: hash,
+      serverTableHashes: body.tableHashes,
+      reason: "noop_same_snapshot",
+    };
+  }
+
   const now = new Date().toISOString();
   const newRevision = currentRevision + 1;
 
@@ -601,6 +630,7 @@ export async function handleDeltaPush(
     ok: true,
     accepted: true,
     revision: newRevision,
+    snapshotHash: hash,
     serverTableHashes: body.tableHashes,
     reason: "delta_applied",
   };
