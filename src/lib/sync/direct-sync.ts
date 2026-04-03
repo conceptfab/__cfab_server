@@ -66,17 +66,22 @@ export interface StatusBody {
   userId: string;
   deviceId: string;
   clientRevision: number;
-  clientHash: string | null;
+  clientHash?: string | null;
   tableHashes?: TableHashes;
 }
 
+export type SyncCommand = "idle" | "send_delta" | "send_full" | "pull";
+
 export interface StatusResponse {
   ok: true;
+  command: SyncCommand;
   serverRevision: number;
   serverHash: string | null;
+  onlineDevices: number;
+  reason: string;
+  // Legacy compat — derived from command
   shouldPush: boolean;
   shouldPull: boolean;
-  reason: string;
 }
 
 export interface PushBody {
@@ -250,113 +255,76 @@ export async function handleStatus(
   userId: string,
   body: StatusBody,
 ): Promise<StatusResponse> {
-  // Mark device as seen on every status check
+  // 1. Register heartbeat
   touchDeviceLastSeen(body.deviceId).catch(() => {});
+
+  // 2. Count online devices (seen in last 5 min)
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const allDevices = await getDevicesForUser(userId);
+  const onlineCount = allDevices.filter(
+    (d) => d.lastSeenAt && new Date(d.lastSeenAt).getTime() > fiveMinAgo,
+  ).length;
 
   const dir = userDir(userId);
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
 
-  // Count online devices for this user (seen in last 5 minutes)
-  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  const allDevices = await getDevicesForUser(userId);
-  const onlineDevices = allDevices.filter(
-    (d) => d.lastSeenAt && new Date(d.lastSeenAt).getTime() > fiveMinAgo,
-  );
+  function reply(command: SyncCommand, reason: string): StatusResponse {
+    return {
+      ok: true,
+      command,
+      serverRevision: meta?.revision ?? 0,
+      serverHash: meta?.payloadSha256 ?? null,
+      onlineDevices: onlineCount,
+      reason,
+      shouldPush: command === "send_delta" || command === "send_full",
+      shouldPull: command === "pull",
+    };
+  }
 
+  // 3. No data on server — need initial baseline
   if (!meta) {
-    // No data on server — first push to create baseline (even with 1 device)
-    return {
-      ok: true,
-      serverRevision: 0,
-      serverHash: null,
-      shouldPush: true,
-      shouldPull: false,
-      reason: "no_server_data",
-    };
+    return reply("send_full", "no_server_data");
   }
 
-  // Only 1 device online — no point syncing, just confirm current state
-  if (onlineDevices.length <= 1) {
-    return {
-      ok: true,
-      serverRevision: meta.revision,
-      serverHash: meta.payloadSha256,
-      shouldPush: false,
-      shouldPull: false,
-      reason: "single_device",
-    };
+  // 4. Single device — heartbeat only, no sync needed
+  if (onlineCount <= 1) {
+    return reply("idle", "single_device");
   }
 
-  const revisionMatch = body.clientRevision === meta.revision;
+  // 5. Multiple devices online — determine sync command
+  const clientRev = body.clientRevision ?? 0;
+
+  if (clientRev < meta.revision) {
+    return reply("pull", "client_behind");
+  }
+
+  if (clientRev > meta.revision) {
+    return reply("send_delta", "client_ahead");
+  }
+
+  // Same revision — check if data actually differs
   const hashMatch =
     body.clientHash != null &&
     meta.payloadSha256 != null &&
     body.clientHash === meta.payloadSha256;
 
-  if (revisionMatch && hashMatch) {
-    return {
-      ok: true,
-      serverRevision: meta.revision,
-      serverHash: meta.payloadSha256,
-      shouldPush: false,
-      shouldPull: false,
-      reason: "in_sync",
-    };
+  if (hashMatch) {
+    return reply("idle", "in_sync");
   }
 
-  // Table-hash based comparison for delta detection
   if (body.tableHashes && meta.tableHashes) {
     const tablesMatch =
       body.tableHashes.projects === meta.tableHashes.projects &&
       body.tableHashes.applications === meta.tableHashes.applications &&
       body.tableHashes.sessions === meta.tableHashes.sessions &&
       body.tableHashes.manual_sessions === meta.tableHashes.manual_sessions;
-
     if (tablesMatch) {
-      return {
-        ok: true,
-        serverRevision: meta.revision,
-        serverHash: meta.payloadSha256,
-        shouldPush: false,
-        shouldPull: false,
-        reason: "table_hashes_match",
-      };
+      return reply("idle", "table_hashes_match");
     }
   }
 
-  if (body.clientRevision < meta.revision) {
-    return {
-      ok: true,
-      serverRevision: meta.revision,
-      serverHash: meta.payloadSha256,
-      shouldPush: false,
-      shouldPull: true,
-      reason: "client_behind",
-    };
-  }
-
-  // Client ahead — should push new data
-  if (body.clientRevision > meta.revision) {
-    return {
-      ok: true,
-      serverRevision: meta.revision,
-      serverHash: meta.payloadSha256,
-      shouldPush: true,
-      shouldPull: false,
-      reason: "client_ahead",
-    };
-  }
-
-  // Same revision but hash mismatch — don't push (would be pointless),
-  // just tell the client the server hash so it can align.
-  return {
-    ok: true,
-    serverRevision: meta.revision,
-    serverHash: meta.payloadSha256,
-    shouldPush: false,
-    shouldPull: false,
-    reason: "same_revision_hash_drift",
-  };
+  // Same revision, different hash — hash drift, don't push
+  return reply("idle", "same_revision_hash_drift");
 }
 
 export async function handlePush(
