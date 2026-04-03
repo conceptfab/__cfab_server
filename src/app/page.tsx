@@ -10,6 +10,7 @@ import {
 import {
   getSyncDashboardSummary,
   type SyncDashboardUserSummary,
+  type SyncDashboardSnapshotSummary,
   type SyncDeliveryStatus,
 } from "@/lib/sync/repository";
 
@@ -52,6 +53,14 @@ function formatDate(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("pl-PL");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** i;
+  return `${value.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function formatUptime(totalSeconds: number): string {
@@ -323,6 +332,106 @@ function UserStatusView({
                   </tbody>
                 </table>
               </div>
+            </article>
+            {/* SSE connections */}
+            <article className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+              <h2 className="text-sm font-medium text-zinc-200">
+                Polaczenia SSE (real-time)
+              </h2>
+              {user.sseConnectedDevices.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-500">
+                  Brak aktywnych polaczen SSE. Klienty polacza sie automatycznie po uruchomieniu.
+                </p>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {user.sseConnectedDevices.map((deviceId) => (
+                    <span
+                      key={deviceId}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-mono text-emerald-300"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      {deviceId}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-zinc-500">
+                Polaczonych urzadzen: {user.sseConnectedDevices.length}
+              </p>
+            </article>
+
+            {/* Sync history */}
+            <article className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+              <h2 className="text-sm font-medium text-zinc-200">
+                Historia synchronizacji
+              </h2>
+              {user.snapshots.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-500">
+                  Brak zakończonych sesji synchronizacji.
+                </p>
+              ) : (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                      <tr>
+                        <th className="px-3 py-2">Rev</th>
+                        <th className="px-3 py-2">Data</th>
+                        <th className="px-3 py-2">Zrodlo</th>
+                        <th className="px-3 py-2">Typ</th>
+                        <th className="px-3 py-2">Rozmiar</th>
+                        <th className="px-3 py-2">Hash</th>
+                        <th className="px-3 py-2">Payload</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800">
+                      {user.snapshots.map((snap) => (
+                        <tr key={snap.revision}>
+                          <td className="px-3 py-3 font-mono text-zinc-100">
+                            {snap.revision}
+                          </td>
+                          <td className="px-3 py-3 text-zinc-300">
+                            {formatDate(snap.receivedAt)}
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-zinc-200 break-all">
+                            {snap.sourceDeviceId}
+                          </td>
+                          <td className="px-3 py-3">
+                            <span
+                              className={
+                                snap.isDelta
+                                  ? "inline-flex items-center rounded-full border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300"
+                                  : "inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-xs text-violet-300"
+                              }
+                            >
+                              {snap.isDelta ? "delta" : "full"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-zinc-300">
+                            {formatBytes(snap.sizeBytes)}
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-zinc-400">
+                            {shortHash(snap.payloadSha256)}
+                          </td>
+                          <td className="px-3 py-3">
+                            <span
+                              className={
+                                snap.archiveAvailable
+                                  ? "text-xs text-emerald-300"
+                                  : "text-xs text-zinc-500"
+                              }
+                            >
+                              {snap.archiveAvailable ? "jest" : "usuniety"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-zinc-500">
+                Laczna liczba synchronizacji: {user.snapshotCount}
+              </p>
             </article>
           </>
         )}

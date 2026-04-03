@@ -7,6 +7,7 @@ import type {
   SyncStoreFile,
   UserSyncRecord,
 } from "@/lib/sync/contracts";
+import { getConnectedDevices } from "@/lib/sync/event-bus";
 
 const DATA_DIR =
   process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
@@ -25,6 +26,16 @@ export interface SyncDashboardDeviceSummary {
   status: SyncDeliveryStatus;
 }
 
+export interface SyncDashboardSnapshotSummary {
+  revision: number;
+  receivedAt: string;
+  sourceDeviceId: string;
+  sizeBytes: number;
+  payloadSha256: string;
+  isDelta: boolean;
+  archiveAvailable: boolean;
+}
+
 export interface SyncDashboardUserSummary {
   userId: string;
   snapshotCount: number;
@@ -38,6 +49,8 @@ export interface SyncDashboardUserSummary {
   upToDateDevices: number;
   unknownDevices: number;
   devices: SyncDashboardDeviceSummary[];
+  snapshots: SyncDashboardSnapshotSummary[];
+  sseConnectedDevices: string[];
 }
 
 export interface SyncDashboardSummary {
@@ -392,6 +405,19 @@ export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
     upToDateDevices += userUpToDateDevices;
     unknownDevices += userUnknownDevices;
 
+    const snapshotSummaries: SyncDashboardSnapshotSummary[] = user.snapshots
+      .slice()
+      .sort((a, b) => b.revision - a.revision)
+      .map((s) => ({
+        revision: s.revision,
+        receivedAt: s.receivedAt,
+        sourceDeviceId: s.sourceDeviceId,
+        sizeBytes: s.sizeBytes,
+        payloadSha256: s.payloadSha256,
+        isDelta: s.tableHashes != null,
+        archiveAvailable: s.archive !== null,
+      }));
+
     users.push({
       userId,
       snapshotCount: user.snapshots.length,
@@ -405,6 +431,8 @@ export async function getSyncDashboardSummary(): Promise<SyncDashboardSummary> {
       upToDateDevices: userUpToDateDevices,
       unknownDevices: userUnknownDevices,
       devices,
+      snapshots: snapshotSummaries,
+      sseConnectedDevices: getConnectedDevices(userId),
     });
   }
 

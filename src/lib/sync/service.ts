@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { getEnv } from "@/lib/config/env";
 import { jsonByteSize, sha256Json } from "@/lib/sync/hash";
 import { getSyncRepository, type SyncRepository } from "@/lib/sync/repository";
+import { notifyPeers } from "@/lib/sync/event-bus";
 import type {
   SyncAckRequest,
   SyncAckResponse,
@@ -231,6 +232,16 @@ export async function pushSnapshot(
     user.latestSnapshot = user.snapshots[user.snapshots.length - 1] ?? null;
     pruneDeliveredArchives(user);
 
+    // Notify other connected devices via SSE
+    notifyPeers({
+      type: "sync_available",
+      userId: req.userId,
+      sourceDeviceId: req.deviceId,
+      revision: nextRevision,
+      reason: "snapshot_pushed",
+      timestamp: receivedAt,
+    });
+
     return {
       ok: true,
       accepted: true,
@@ -339,6 +350,16 @@ export async function pushDelta(
     }
     user.latestSnapshot = user.snapshots[user.snapshots.length - 1] ?? null;
     pruneDeliveredArchives(user);
+
+    // Notify other connected devices via SSE
+    notifyPeers({
+      type: "sync_available",
+      userId: req.userId,
+      sourceDeviceId: req.deviceId,
+      revision: nextRevision,
+      reason: "delta_pushed",
+      timestamp: receivedAt,
+    });
 
     return {
       ok: true,
