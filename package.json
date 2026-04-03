@@ -11,10 +11,10 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1023.0",
     "@aws-sdk/s3-request-presigner": "^3.1023.0",
-    "@prisma/client": "^7.6.0",
+    "@prisma/client": "^6.19.3",
     "basic-ftp": "^5.2.0",
     "next": "16.1.6",
-    "prisma": "^7.6.0",
+    "prisma": "^6.19.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "ssh2-sftp-client": "^12.1.1"
