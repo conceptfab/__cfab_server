@@ -703,14 +703,31 @@ export async function handleTestRoundtrip(
   // Touch device
   touchDeviceLastSeen(body.deviceId).catch(() => {});
 
+  const roundtripMs = Date.now() - t0;
+
   log("info", "direct-sync.test-roundtrip", {
     userId,
     deviceId: body.deviceId,
     writeOk,
     readOk,
     matches,
-    roundtripMs: Date.now() - t0,
+    sizeBytes: envelopeStr.length,
+    roundtripMs,
   });
+
+  appendHistory({
+    id: randomUUID(),
+    userId,
+    deviceId: body.deviceId,
+    action: "test",
+    revision: 0,
+    hash: null,
+    sizeBytes: envelopeStr.length,
+    durationMs: roundtripMs,
+    status: writeOk && readOk && matches ? "ok" : "error",
+    detail: `test roundtrip ${(envelopeStr.length / 1024).toFixed(1)} KB, write=${writeOk} read=${readOk} match=${matches}`,
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
 
   return {
     ok: true,
@@ -721,6 +738,6 @@ export async function handleTestRoundtrip(
     },
     echoPayload: body.testPayload,
     serverTimestamp: new Date().toISOString(),
-    roundtripMs: Date.now() - t0,
+    roundtripMs,
   };
 }
