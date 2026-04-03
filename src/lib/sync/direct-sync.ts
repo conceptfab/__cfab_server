@@ -540,3 +540,107 @@ export async function handleAck(
     reason: isLatest ? "ack_latest" : "ack_outdated",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Test roundtrip — write test payload, read it back, delete, return proof
+// ---------------------------------------------------------------------------
+
+export interface TestRoundtripBody {
+  userId: string;
+  deviceId: string;
+  testPayload: Record<string, unknown>;
+}
+
+export interface TestRoundtripResponse {
+  ok: true;
+  steps: {
+    write: { success: boolean; path: string; sizeBytes: number };
+    read: { success: boolean; matches: boolean };
+    cleanup: { success: boolean };
+  };
+  echoPayload: Record<string, unknown>;
+  serverTimestamp: string;
+  roundtripMs: number;
+}
+
+export async function handleTestRoundtrip(
+  userId: string,
+  body: TestRoundtripBody,
+): Promise<TestRoundtripResponse> {
+  const t0 = Date.now();
+  const dir = userDir(userId);
+  await ensureDir(dir);
+
+  const testFile = path.join(dir, "_test_roundtrip.json");
+  const envelope = {
+    userId,
+    deviceId: body.deviceId,
+    testPayload: body.testPayload,
+    writtenAt: new Date().toISOString(),
+  };
+  const envelopeStr = JSON.stringify(envelope);
+
+  // Step 1: Write
+  let writeOk = false;
+  try {
+    await writeJson(testFile, envelope);
+    writeOk = true;
+  } catch (err) {
+    log("error", "direct-sync.test-roundtrip.write-failed", {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Step 2: Read back and compare
+  let readOk = false;
+  let matches = false;
+  try {
+    const readBack = await readJson<typeof envelope>(testFile);
+    readOk = true;
+    matches =
+      readBack !== null &&
+      JSON.stringify(readBack.testPayload) ===
+        JSON.stringify(body.testPayload);
+  } catch (err) {
+    log("error", "direct-sync.test-roundtrip.read-failed", {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Step 3: Cleanup
+  let cleanupOk = false;
+  try {
+    const { unlink } = await import("node:fs/promises");
+    await unlink(testFile);
+    cleanupOk = true;
+  } catch {
+    // file may not exist if write failed
+    cleanupOk = true;
+  }
+
+  // Touch device
+  touchDeviceLastSeen(body.deviceId).catch(() => {});
+
+  log("info", "direct-sync.test-roundtrip", {
+    userId,
+    deviceId: body.deviceId,
+    writeOk,
+    readOk,
+    matches,
+    roundtripMs: Date.now() - t0,
+  });
+
+  return {
+    ok: true,
+    steps: {
+      write: { success: writeOk, path: testFile, sizeBytes: envelopeStr.length },
+      read: { success: readOk, matches },
+      cleanup: { success: cleanupOk },
+    },
+    echoPayload: body.testPayload,
+    serverTimestamp: new Date().toISOString(),
+    roundtripMs: Date.now() - t0,
+  };
+}
