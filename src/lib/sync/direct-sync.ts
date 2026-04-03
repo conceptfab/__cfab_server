@@ -14,7 +14,7 @@ import path from "node:path";
 
 import type { TableHashes, DeltaData } from "./contracts";
 import { log } from "@/lib/observability/logger";
-import { touchDeviceLastSeen, updateDeviceLastSync } from "./license-store";
+import { touchDeviceLastSeen, updateDeviceLastSync, getDevicesForUser } from "./license-store";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -256,8 +256,15 @@ export async function handleStatus(
   const dir = userDir(userId);
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
 
+  // Count online devices for this user (seen in last 5 minutes)
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const allDevices = await getDevicesForUser(userId);
+  const onlineDevices = allDevices.filter(
+    (d) => d.lastSeenAt && new Date(d.lastSeenAt).getTime() > fiveMinAgo,
+  );
+
   if (!meta) {
-    // No data on server — client should push
+    // No data on server — first push to create baseline (even with 1 device)
     return {
       ok: true,
       serverRevision: 0,
@@ -265,6 +272,18 @@ export async function handleStatus(
       shouldPush: true,
       shouldPull: false,
       reason: "no_server_data",
+    };
+  }
+
+  // Only 1 device online — no point syncing, just confirm current state
+  if (onlineDevices.length <= 1) {
+    return {
+      ok: true,
+      serverRevision: meta.revision,
+      serverHash: meta.payloadSha256,
+      shouldPush: false,
+      shouldPull: false,
+      reason: "single_device",
     };
   }
 
