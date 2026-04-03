@@ -479,7 +479,7 @@ export async function updateStorageBackend(
     // so that omitting a field (e.g. password) preserves the existing value.
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        (backend as Record<string, unknown>)[key] = value;
+        (backend as unknown as Record<string, unknown>)[key] = value;
       }
     }
     await writeStore(store);
