@@ -2,12 +2,13 @@
  * Direct Sync — simple revision-based sync for desktop Tauri clients.
  *
  * Storage layout (per user):
- *   DATA_DIR/online-sync/<userId>/meta.json     — revision, hash, timestamps
- *   DATA_DIR/online-sync/<userId>/snapshot.json  — full data archive
+ *   DATA_DIR/online-sync/<userId>/meta.json      — revision, hash, timestamps
+ *   DATA_DIR/online-sync/<userId>/snapshot.json   — full data archive
+ *   DATA_DIR/online-sync/_history.json            — recent sync history entries
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { TableHashes, DeltaData } from "./contracts";
@@ -21,10 +22,26 @@ import { touchDeviceLastSeen, updateDeviceLastSync } from "./license-store";
 const DATA_DIR =
   process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
 const REPO_DIR = path.join(DATA_DIR, "online-sync");
+const HISTORY_FILE = path.join(REPO_DIR, "_history.json");
+const MAX_HISTORY_ENTRIES = 100;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export interface DirectSyncHistoryEntry {
+  id: string;
+  userId: string;
+  deviceId: string;
+  action: "push" | "delta-push" | "pull" | "ack" | "status" | "test";
+  revision: number;
+  hash: string | null;
+  sizeBytes: number | null;
+  durationMs: number | null;
+  status: "ok" | "noop" | "error";
+  detail: string;
+  timestamp: string;
+}
 
 interface UserMeta {
   revision: number;
@@ -166,6 +183,30 @@ function sha256(input: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+async function appendHistory(entry: DirectSyncHistoryEntry): Promise<void> {
+  try {
+    await ensureDir(REPO_DIR);
+    const existing = (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
+    existing.unshift(entry);
+    if (existing.length > MAX_HISTORY_ENTRIES) {
+      existing.length = MAX_HISTORY_ENTRIES;
+    }
+    await writeJson(HISTORY_FILE, existing);
+  } catch (err) {
+    log("warn", "direct-sync.history.write-failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export async function getDirectSyncHistory(): Promise<DirectSyncHistoryEntry[]> {
+  return (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -302,8 +343,20 @@ export async function handlePush(
     sizeBytes: archiveStr.length,
   });
 
-  // Update device last-sync timestamp in license store
   updateDeviceLastSync(body.deviceId, hash).catch(() => {});
+  appendHistory({
+    id: randomUUID(),
+    userId,
+    deviceId: body.deviceId,
+    action: "push",
+    revision: newRevision,
+    hash: hash.substring(0, 12),
+    sizeBytes: archiveStr.length,
+    durationMs: null,
+    status: "ok",
+    detail: "full archive push accepted",
+    timestamp: now,
+  }).catch(() => {});
 
   return {
     ok: true,
@@ -366,6 +419,20 @@ export async function handleDeltaPull(
     clientRevision: body.clientRevision,
     serverRevision: meta.revision,
   });
+
+  appendHistory({
+    id: randomUUID(),
+    userId,
+    deviceId: body.deviceId,
+    action: "pull",
+    revision: meta.revision,
+    hash: meta.payloadSha256?.substring(0, 12) ?? null,
+    sizeBytes: null,
+    durationMs: null,
+    status: "ok",
+    detail: `pull r${body.clientRevision} → r${meta.revision}`,
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
 
   return {
     ok: true,
@@ -489,6 +556,19 @@ export async function handleDeltaPush(
   });
 
   updateDeviceLastSync(body.deviceId, hash).catch(() => {});
+  appendHistory({
+    id: randomUUID(),
+    userId,
+    deviceId: body.deviceId,
+    action: "delta-push",
+    revision: newRevision,
+    hash: hash.substring(0, 12),
+    sizeBytes: JSON.stringify(delta).length,
+    durationMs: null,
+    status: "ok",
+    detail: `delta r${body.baseRevision} → r${newRevision}, ${delta.tombstones?.length ?? 0} tombstones`,
+    timestamp: now,
+  }).catch(() => {});
 
   return {
     ok: true,

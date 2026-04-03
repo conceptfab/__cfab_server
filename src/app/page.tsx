@@ -12,6 +12,7 @@ import {
 import type { SyncSession, SyncSessionStatus, SyncStepLog, AsyncDeltaPackage, AsyncPackageStatus } from "@/lib/sync/session-contracts";
 import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, LicenseStatus } from "@/lib/sync/license-contracts";
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
+import type { DirectSyncHistoryEntry } from "@/lib/sync/direct-sync";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
 export const runtime = "nodejs";
@@ -718,6 +719,89 @@ function SyncHistorySection({ sessions }: { sessions: SyncSession[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Section: Direct Sync History
+// ---------------------------------------------------------------------------
+
+function actionBadge(action: DirectSyncHistoryEntry["action"]) {
+  switch (action) {
+    case "push":
+      return { label: "PUSH", className: "border-blue-500/30 bg-blue-500/10 text-blue-300" };
+    case "delta-push":
+      return { label: "DELTA", className: "border-cyan-500/30 bg-cyan-500/10 text-cyan-300" };
+    case "pull":
+      return { label: "PULL", className: "border-purple-500/30 bg-purple-500/10 text-purple-300" };
+    case "ack":
+      return { label: "ACK", className: "border-zinc-500/30 bg-zinc-500/10 text-zinc-300" };
+    case "test":
+      return { label: "TEST", className: "border-amber-500/30 bg-amber-500/10 text-amber-300" };
+    default:
+      return { label: action.toUpperCase(), className: "border-zinc-500/30 bg-zinc-500/10 text-zinc-300" };
+  }
+}
+
+function DirectSyncHistorySection({ entries }: { entries: DirectSyncHistoryEntry[] }) {
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-zinc-200">Historia Direct Sync</h2>
+        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+          ostatnie {entries.length}
+        </span>
+      </div>
+      {entries.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-500">Brak wpisow direct sync.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="px-3 py-2">Czas</th>
+                <th className="px-3 py-2">Akcja</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">User</th>
+                <th className="px-3 py-2">Device</th>
+                <th className="px-3 py-2">Rewizja</th>
+                <th className="px-3 py-2">Hash</th>
+                <th className="px-3 py-2">Rozmiar</th>
+                <th className="px-3 py-2">Szczegoly</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800">
+              {entries.map((entry) => {
+                const badge = actionBadge(entry.action);
+                return (
+                  <tr key={entry.id}>
+                    <td className="px-3 py-3 text-xs text-zinc-300 whitespace-nowrap">{formatDate(entry.timestamp)}</td>
+                    <td className="px-3 py-3">
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${badge.className}`}>
+                        {badge.label}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className={entry.status === "ok" ? "text-emerald-400 text-xs" : entry.status === "noop" ? "text-zinc-400 text-xs" : "text-rose-400 text-xs"}>
+                        {entry.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{entry.userId}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{entry.deviceId.slice(0, 12)}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">r{entry.revision}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{entry.hash ?? "\u2014"}</td>
+                    <td className="px-3 py-3 text-xs text-zinc-400">
+                      {entry.sizeBytes != null ? `${(entry.sizeBytes / 1024).toFixed(1)} KB` : "\u2014"}
+                    </td>
+                    <td className="px-3 py-3 text-xs text-zinc-400 max-w-[250px] truncate">{entry.detail}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Section: Paczki async delta
 // ---------------------------------------------------------------------------
 
@@ -878,6 +962,7 @@ function DashboardView({
         <DevicesSection devices={data.devices} />
         <AsyncPackagesSection packages={data.asyncPackages} />
         <SyncHistorySection sessions={data.completedSessions} />
+        <DirectSyncHistorySection entries={data.directSyncHistory} />
 
         <footer className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
           <div className="flex items-center justify-between">
