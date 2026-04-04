@@ -286,18 +286,20 @@ export async function handleStatus(
     return reply("send_full", "no_server_data");
   }
 
-  // 4. Single device — heartbeat only, no sync needed
-  if (onlineCount <= 1) {
-    return reply("idle", "single_device");
-  }
-
-  // 5. Multiple devices online — determine sync command
+  // 4. Client behind server — always pull, even if only one device is online.
+  //    Data may have been pushed by another device that's now offline.
   const clientRev = body.clientRevision ?? 0;
 
   if (clientRev < meta.revision) {
     return reply("pull", "client_behind");
   }
 
+  // 5. Single device — heartbeat only, no push needed
+  if (onlineCount <= 1) {
+    return reply("idle", "single_device");
+  }
+
+  // 6. Multiple devices online — determine sync command
   if (clientRev > meta.revision) {
     return reply("send_delta", "client_ahead");
   }
