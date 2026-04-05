@@ -504,6 +504,7 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
                 <th className="px-3 py-2">Device ID</th>
                 <th className="px-3 py-2">Nazwa</th>
                 <th className="px-3 py-2">Grupa</th>
+                <th className="px-3 py-2">API Token</th>
                 <th className="px-3 py-2">Fixed master</th>
                 <th className="px-3 py-2">Zarejestrowano</th>
                 <th className="px-3 py-2">Ostatnio widziano</th>
@@ -523,6 +524,20 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
                     <td className="px-3 py-3 font-mono text-xs text-zinc-200">{d.deviceId.slice(0, 12)}</td>
                     <td className="px-3 py-3 text-zinc-200">{d.deviceName}</td>
                     <td className="px-3 py-3 font-mono text-xs text-zinc-400">{d.groupId.slice(0, 8)}</td>
+                    <td className="px-3 py-3">
+                      {d.apiToken ? (
+                        <button
+                          type="button"
+                          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+                          title="Kliknij aby skopiowac token"
+                          onClick={() => { navigator.clipboard.writeText(d.apiToken); }}
+                        >
+                          {d.apiToken.slice(0, 8)}...
+                        </button>
+                      ) : (
+                        <span className="text-xs text-zinc-600">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-zinc-300">
                       {d.isFixedMaster ? (
                         <span className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-300">master</span>
