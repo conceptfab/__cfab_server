@@ -115,6 +115,7 @@ export async function handleSessionCreate(
       groupId: group.id,
       licenseId: license.id,
       deviceName: body.deviceId,
+      apiToken: "",
       registeredAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
       lastSyncAt: null,
