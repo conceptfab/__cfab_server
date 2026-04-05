@@ -275,6 +275,20 @@ export async function handleStatus(
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
 
   function reply(command: SyncCommand, reason: string): StatusResponse {
+    appendHistory({
+      id: randomUUID(),
+      userId,
+      deviceId: body.deviceId,
+      action: "status",
+      revision: meta?.revision ?? 0,
+      hash: meta?.payloadSha256?.substring(0, 12) ?? null,
+      sizeBytes: null,
+      durationMs: null,
+      status: "ok",
+      detail: `${command} (${reason})`,
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
+
     return {
       ok: true,
       command,
