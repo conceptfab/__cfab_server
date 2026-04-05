@@ -14,6 +14,7 @@ import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, Li
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import type { DirectSyncHistoryEntry } from "@/lib/sync/direct-sync";
 import { ClearSyncHistoryButton } from "@/components/clear-sync-history-button";
+import { CopyTokenButton } from "@/components/copy-token-button";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
 export const runtime = "nodejs";
@@ -526,14 +527,7 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
                     <td className="px-3 py-3 font-mono text-xs text-zinc-400">{d.groupId.slice(0, 8)}</td>
                     <td className="px-3 py-3">
                       {d.apiToken ? (
-                        <button
-                          type="button"
-                          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
-                          title="Kliknij aby skopiowac token"
-                          onClick={() => { navigator.clipboard.writeText(d.apiToken); }}
-                        >
-                          {d.apiToken.slice(0, 8)}...
-                        </button>
+                        <CopyTokenButton token={d.apiToken} />
                       ) : (
                         <span className="text-xs text-zinc-600">—</span>
                       )}

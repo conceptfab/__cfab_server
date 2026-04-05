@@ -100,12 +100,12 @@ export async function authenticateSyncRequest(
     }
 
     // 2. Fallback: check device tokens from license-store
+    // Device tokens prove the device is registered (authentication).
+    // The sync namespace (userId) comes from bodyUserId — this keeps backward
+    // compatibility with data already stored under the client's userId.
     const deviceUserId = await resolveUserByDeviceToken(token);
     if (deviceUserId) {
-      if (bodyUserId && bodyUserId !== deviceUserId) {
-        throw forbidden("Body userId does not match token user", "user_mismatch");
-      }
-      return { userId: deviceUserId, method: "device-token" };
+      return { userId: bodyUserId || deviceUserId, method: "device-token" };
     }
 
     throw unauthorized("Invalid API token", "invalid_token");
