@@ -85,6 +85,7 @@ export async function POST(request: Request) {
         groupId: group.id,
         groupName: group.name,
         deviceId: device.deviceId,
+        apiToken: device.apiToken,
         maxDevices: license.maxDevices,
         activeDevices: updatedLicense?.activeDevices.length ?? license.activeDevices.length,
         expiresAt: license.expiresAt,
