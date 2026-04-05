@@ -54,6 +54,12 @@ async function readStore(): Promise<LicenseStoreFile> {
       if (!store.storageBackends) {
         (store as any).storageBackends = {};
       }
+      // Backfill apiToken for devices registered before token generation
+      for (const device of Object.values(store.devices)) {
+        if (!device.apiToken) {
+          device.apiToken = generateApiToken();
+        }
+      }
       return store;
     }
     return emptyStore();
