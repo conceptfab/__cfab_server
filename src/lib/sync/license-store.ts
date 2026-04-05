@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -14,6 +14,10 @@ import type {
 } from "./license-contracts";
 import { PLAN_DEFAULTS } from "./license-contracts";
 import { generateLicenseKey } from "./license-keygen";
+
+function generateApiToken(): string {
+  return randomBytes(32).toString("hex");
+}
 
 const DATA_DIR =
   process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
@@ -335,6 +339,7 @@ export async function registerDevice(
       groupId,
       licenseId,
       deviceName,
+      apiToken: generateApiToken(),
       registeredAt: nowIso(),
       lastSeenAt: nowIso(),
       lastSyncAt: null,
@@ -428,6 +433,38 @@ export async function getDevicesForUser(userId: string): Promise<DeviceRegistrat
         .map((g) => g.id),
     );
     return Object.values(store.devices).filter((d) => userGroupIds.has(d.groupId));
+  });
+}
+
+export async function regenerateDeviceToken(
+  licenseId: string,
+  deviceId: string,
+): Promise<DeviceRegistration | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    const device = store.devices[deviceId];
+    if (!device || device.licenseId !== licenseId) return null;
+
+    device.apiToken = generateApiToken();
+    await writeStore(store);
+    return device;
+  });
+}
+
+export async function findDeviceByToken(
+  token: string,
+): Promise<{ device: DeviceRegistration; group: ClientGroup } | null> {
+  return withMutex(async () => {
+    const store = await readStore();
+    for (const device of Object.values(store.devices)) {
+      if (device.apiToken === token) {
+        const group = store.groups[device.groupId];
+        if (group) {
+          return { device, group };
+        }
+      }
+    }
+    return null;
   });
 }
 
