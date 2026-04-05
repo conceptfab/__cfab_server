@@ -2,10 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 
 import { getEnv } from "@/lib/config/env";
 import { forbidden, unauthorized } from "@/lib/http/error";
+import { findDeviceByToken } from "@/lib/sync/license-store";
 
 export interface SyncAuthContext {
   userId: string;
-  method: "token" | "dev-body-userid";
+  method: "token" | "device-token" | "dev-body-userid";
 }
 
 function safeStringEqual(left: string, right: string): boolean {
@@ -68,10 +69,16 @@ function resolveUserByToken(token: string): string | null {
   return null;
 }
 
-export function authenticateSyncRequest(
+async function resolveUserByDeviceToken(token: string): Promise<string | null> {
+  const result = await findDeviceByToken(token);
+  if (!result) return null;
+  return result.group.ownerId;
+}
+
+export async function authenticateSyncRequest(
   request: Request,
   bodyUserId?: string | null,
-): SyncAuthContext {
+): Promise<SyncAuthContext> {
   const env = getEnv();
 
   if (env.syncAuthMode === "session") {
@@ -83,14 +90,25 @@ export function authenticateSyncRequest(
 
   const token = getBearerToken(request);
   if (token) {
-    const userId = resolveUserByToken(token);
-    if (!userId) {
-      throw unauthorized("Invalid API token", "invalid_token");
+    // 1. Check env tokens (existing behavior)
+    const envUserId = resolveUserByToken(token);
+    if (envUserId) {
+      if (bodyUserId && bodyUserId !== envUserId) {
+        throw forbidden("Body userId does not match token user", "user_mismatch");
+      }
+      return { userId: envUserId, method: "token" };
     }
-    if (bodyUserId && bodyUserId !== userId) {
-      throw forbidden("Body userId does not match token user", "user_mismatch");
+
+    // 2. Fallback: check device tokens from license-store
+    const deviceUserId = await resolveUserByDeviceToken(token);
+    if (deviceUserId) {
+      if (bodyUserId && bodyUserId !== deviceUserId) {
+        throw forbidden("Body userId does not match token user", "user_mismatch");
+      }
+      return { userId: deviceUserId, method: "device-token" };
     }
-    return { userId, method: "token" };
+
+    throw unauthorized("Invalid API token", "invalid_token");
   }
 
   if (env.syncAllowInsecureDevUserIdFallback && bodyUserId) {

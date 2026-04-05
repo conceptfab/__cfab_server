@@ -32,7 +32,7 @@ export async function validateTokenSyncAuth(request: Request): Promise<string | 
     const token = authHeader.substring(7);
     try {
         // reuse standard auth strategy without body requirements
-        const auth = authenticateSyncRequest(request, null);
+        const auth = await authenticateSyncRequest(request, null);
         return auth.userId;
     } catch {
        return null;
@@ -144,7 +144,7 @@ export async function handleSyncPost<TBody, TResponse>(
     const bodyUserId = spec.getBodyUserId(body) ?? null;
     deviceIdForLogs = spec.getDeviceId(body);
 
-    const auth = authenticateSyncRequest(request, bodyUserId);
+    const auth = await authenticateSyncRequest(request, bodyUserId);
     userIdForLogs = auth.userId;
 
     const rateLimitKey = [
@@ -241,7 +241,7 @@ export async function handleSyncGet<TResponse>(
     const url = new URL(request.url);
     const params = spec.extractParams(request, url);
 
-    const auth = authenticateSyncRequest(request, null);
+    const auth = await authenticateSyncRequest(request, null);
     userIdForLogs = auth.userId;
 
     const rateLimitKey = [

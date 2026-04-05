@@ -32,7 +32,7 @@ export async function GET(request: Request): Promise<Response> {
           headers: { ...Object.fromEntries(request.headers), authorization: `Bearer ${queryToken}` },
         })
       : request;
-    const auth = authenticateSyncRequest(reqWithAuth, null);
+    const auth = await authenticateSyncRequest(reqWithAuth, null);
     userId = auth.userId;
   } catch {
     return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
