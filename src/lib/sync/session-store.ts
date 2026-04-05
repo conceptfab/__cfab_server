@@ -447,6 +447,11 @@ export async function cleanupOldSessions(maxAgeMs: number): Promise<number> {
   return result.count;
 }
 
+export async function clearAllSessions(): Promise<{ cleared: number }> {
+  const result = await prisma.syncSession.deleteMany({});
+  return { cleared: result.count };
+}
+
 // ---------------------------------------------------------------------------
 // Atomic get + validate ownership + action
 // ---------------------------------------------------------------------------

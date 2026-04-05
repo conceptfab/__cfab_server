@@ -14,6 +14,7 @@ import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, Li
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import type { DirectSyncHistoryEntry } from "@/lib/sync/direct-sync";
 import { ClearSyncHistoryButton } from "@/components/clear-sync-history-button";
+import { ClearSyncSessionsButton } from "@/components/clear-sync-sessions-button";
 import { CopyTokenButton } from "@/components/copy-token-button";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
@@ -601,7 +602,7 @@ function SyncStatsSection({
       groupsForLicense.some((g) => g.id === d.groupId),
     );
     return {
-      key: l.licenseKey.slice(0, 12),
+      key: l.licenseKey,
       plan: l.plan,
       deviceCount: devicesForLicense.length,
       maxDevices: l.maxDevices,
@@ -661,7 +662,7 @@ function SyncStatsSection({
                 return (
                   <div key={lu.key} className="rounded border border-zinc-800 px-2.5 py-1.5">
                     <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-mono text-zinc-300">{lu.key}&hellip; <span className="text-zinc-500">({lu.plan})</span></span>
+                      <span className="font-mono text-zinc-300">{lu.key} <span className="text-zinc-500">({lu.plan})</span></span>
                       <span className="text-zinc-400">{lu.deviceCount}/{lu.maxDevices} urz.</span>
                     </div>
                     <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
@@ -686,9 +687,12 @@ function SyncHistorySection({ sessions }: { sessions: SyncSession[] }) {
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-zinc-200">Historia synchronizacji</h2>
-        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          ostatnie {sessions.length}
-        </span>
+        <div className="flex items-center gap-2">
+          {sessions.length > 0 && <ClearSyncSessionsButton />}
+          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+            ostatnie {sessions.length}
+          </span>
+        </div>
       </div>
       {sessions.length === 0 ? (
         <p className="mt-3 text-sm text-zinc-500">Brak zakonconych sesji.</p>
