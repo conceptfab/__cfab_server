@@ -14,7 +14,7 @@ import path from "node:path";
 
 import type { TableHashes, DeltaData } from "./contracts";
 import { log } from "@/lib/observability/logger";
-import { touchDeviceLastSeen, updateDeviceLastSync, getDevicesForUser } from "./license-store";
+import { touchDeviceLastSeen, updateDeviceLastSync, getDevicesForUser, getDevice, getDevicesForLicense } from "./license-store";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -259,8 +259,14 @@ export async function handleStatus(
   touchDeviceLastSeen(body.deviceId).catch(() => {});
 
   // 2. Count online devices (seen in last 5 min)
+  //    First try to find peers via the device's license (works regardless of
+  //    group.ownerId).  Fall back to getDevicesForUser for env-token users
+  //    that may not have a license-store entry.
   const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  const allDevices = await getDevicesForUser(userId);
+  const requestingDevice = await getDevice(body.deviceId);
+  const allDevices = requestingDevice
+    ? await getDevicesForLicense(requestingDevice.licenseId)
+    : await getDevicesForUser(userId);
   const onlineCount = allDevices.filter(
     (d) => d.lastSeenAt && new Date(d.lastSeenAt).getTime() > fiveMinAgo,
   ).length;
