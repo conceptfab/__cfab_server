@@ -84,6 +84,7 @@ export interface DeviceRegistration {
   groupId: string;
   licenseId: string;
   deviceName: string;
+  apiToken: string;
   registeredAt: string;
   lastSeenAt: string;
   lastSyncAt: string | null;
