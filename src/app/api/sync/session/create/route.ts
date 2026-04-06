@@ -26,6 +26,7 @@ export async function POST(request: Request) {
         deviceId: body.deviceId,
         markerHash: typeof body.markerHash === "string" ? body.markerHash : null,
         tableHashes: body.tableHashes && typeof body.tableHashes === "object" ? body.tableHashes as SessionCreateBody["tableHashes"] : null,
+        forceFullSync: typeof body.forceFullSync === "boolean" ? body.forceFullSync : false,
       };
     },
     getBodyUserId: () => null,
