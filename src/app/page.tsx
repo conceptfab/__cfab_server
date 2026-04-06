@@ -9,12 +9,10 @@ import {
   SYNC_DASHBOARD_AUTH_COOKIE,
   getDashboardUserIdFromCookie,
 } from "@/lib/auth/dashboard-page-auth";
-import type { SyncSession, SyncSessionStatus, SyncStepLog, AsyncDeltaPackage, AsyncPackageStatus } from "@/lib/sync/session-contracts";
 import type { License, ClientGroup, DeviceRegistration, StorageBackendConfig, LicenseStatus } from "@/lib/sync/license-contracts";
 import { getDashboardData, type DashboardData } from "@/lib/sync/dashboard";
 import type { DirectSyncHistoryEntry } from "@/lib/sync/direct-sync";
 import { ClearSyncHistoryButton } from "@/components/clear-sync-history-button";
-import { ClearSyncSessionsButton } from "@/components/clear-sync-sessions-button";
 import { CopyTokenButton } from "@/components/copy-token-button";
 import { healthCheck, type SftpHealthStatus } from "@/lib/sync/sftp-manager";
 
@@ -54,26 +52,6 @@ function formatUptime(totalSeconds: number): string {
   return parts.join(" ");
 }
 
-function sessionStatusBadge(status: SyncSessionStatus): { label: string; className: string } {
-  switch (status) {
-    case "awaiting_peer":
-      return { label: "Oczekuje na peera", className: "border-amber-500/40 bg-amber-500/10 text-amber-200" };
-    case "negotiating":
-      return { label: "Negocjacja", className: "border-blue-500/40 bg-blue-500/10 text-blue-200" };
-    case "in_progress":
-      return { label: "W toku", className: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200" };
-    case "completed":
-      return { label: "Zakonczona", className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" };
-    case "failed":
-      return { label: "Blad", className: "border-rose-500/40 bg-rose-500/10 text-rose-200" };
-    case "expired":
-      return { label: "Wygasla", className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
-    case "cancelled":
-      return { label: "Anulowana", className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
-    default:
-      return { label: status, className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
-  }
-}
 
 function licenseStatusBadge(status: LicenseStatus): { label: string; className: string } {
   switch (status) {
@@ -129,115 +107,6 @@ function LoginView({ authState }: { authState: string | null }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section: Aktywne sesje sync
-// ---------------------------------------------------------------------------
-
-function ActiveSessionsSection({ sessions }: { sessions: SyncSession[] }) {
-  return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
-      <h2 className="text-sm font-medium text-zinc-200">Aktywne sesje sync</h2>
-      {sessions.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak aktywnych sesji.</p>
-      ) : (
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-3 py-2">ID</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Master</th>
-                <th className="px-3 py-2">Slave</th>
-                <th className="px-3 py-2">Tryb</th>
-                <th className="px-3 py-2">Krok</th>
-                <th className="px-3 py-2">Utworzona</th>
-                <th className="px-3 py-2">Wygasa</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {sessions.map((session) => {
-                const sBadge = sessionStatusBadge(session.status);
-                const isExpired = new Date(session.expiresAt).getTime() < Date.now();
-                return (
-                  <tr key={session.id}>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">
-                      {session.id.slice(0, 8)}
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${sBadge.className}`}>
-                        {sBadge.label}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">
-                      {session.masterDeviceId.slice(0, 12)}
-                    </td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">
-                      {session.slaveDeviceId ? session.slaveDeviceId.slice(0, 12) : "\u2014"}
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">
-                      {session.syncMode ?? "\u2014"}
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">
-                      {session.currentStep}/13
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">
-                      {formatDate(session.createdAt)}
-                    </td>
-                    <td className={`px-3 py-3 ${isExpired ? "text-rose-300" : "text-zinc-300"}`}>
-                      {formatDate(session.expiresAt)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {/* Step log for active sessions */}
-          {sessions.filter((s) => s.stepLog.length > 0).map((session) => (
-            <details key={`log-${session.id}`} className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-              <summary className="cursor-pointer text-xs font-medium text-zinc-400">
-                Step log — {session.id.slice(0, 8)} ({session.stepLog.length} wpisow)
-              </summary>
-              <div className="mt-2 max-h-48 overflow-y-auto">
-                <table className="min-w-full text-left text-xs">
-                  <thead className="text-[10px] uppercase tracking-wide text-zinc-600">
-                    <tr>
-                      <th className="px-2 py-1">Krok</th>
-                      <th className="px-2 py-1">Faza</th>
-                      <th className="px-2 py-1">Akcja</th>
-                      <th className="px-2 py-1">Device</th>
-                      <th className="px-2 py-1">Status</th>
-                      <th className="px-2 py-1">Czas</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/50">
-                    {session.stepLog.map((entry: SyncStepLog, idx: number) => (
-                      <tr key={idx}>
-                        <td className="px-2 py-1 text-zinc-300">{entry.step}</td>
-                        <td className="px-2 py-1 text-zinc-400">{entry.phase}</td>
-                        <td className="px-2 py-1 text-zinc-300">{entry.action}</td>
-                        <td className="px-2 py-1 font-mono text-zinc-400">{entry.deviceId.slice(0, 8)}</td>
-                        <td className="px-2 py-1">
-                          <span className={
-                            entry.status === "ok" ? "text-emerald-400"
-                            : entry.status === "error" ? "text-rose-400"
-                            : "text-amber-400"
-                          }>
-                            {entry.status}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1 text-zinc-500">{formatDate(entry.timestamp)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Section: Licencje
@@ -553,47 +422,27 @@ function DevicesSection({ devices }: { devices: DeviceRegistration[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Section: Historia synchronizacji
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Section: Sync statistics overview
+// Section: Statystyki (based on direct sync history)
 // ---------------------------------------------------------------------------
 
 function SyncStatsSection({
-  sessions,
+  directHistory,
   devices,
   groups,
   licenses,
 }: {
-  sessions: SyncSession[];
+  directHistory: DirectSyncHistoryEntry[];
   devices: DeviceRegistration[];
   groups: ClientGroup[];
   licenses: License[];
 }) {
-  const completed = sessions.filter((s) => s.status === "completed");
-  const failed = sessions.filter((s) => s.status === "failed");
-  const totalSessions = completed.length + failed.length;
-  const successRate = totalSessions > 0 ? Math.round((completed.length / totalSessions) * 100) : 0;
+  const okEntries = directHistory.filter((e) => e.status === "ok");
+  const errorEntries = directHistory.filter((e) => e.status === "error");
+  const totalOps = okEntries.length + errorEntries.length;
+  const successRate = totalOps > 0 ? Math.round((okEntries.length / totalOps) * 100) : 0;
 
-  // Avg duration of completed sessions (ms)
-  const durations = completed
-    .filter((s) => s.createdAt && s.completedAt)
-    .map((s) => new Date(s.completedAt!).getTime() - new Date(s.createdAt).getTime());
-  const avgDurationMs = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
-  const avgDurationSec = Math.round(avgDurationMs / 1000);
-
-  // Sessions per device (top 5)
-  const deviceSyncCounts = new Map<string, number>();
-  for (const s of [...completed, ...failed]) {
-    deviceSyncCounts.set(s.masterDeviceId, (deviceSyncCounts.get(s.masterDeviceId) ?? 0) + 1);
-    if (s.slaveDeviceId) {
-      deviceSyncCounts.set(s.slaveDeviceId, (deviceSyncCounts.get(s.slaveDeviceId) ?? 0) + 1);
-    }
-  }
-  const topDevices = [...deviceSyncCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  const pushes = directHistory.filter((e) => e.action === "push" || e.action === "delta-push").length;
+  const pulls = directHistory.filter((e) => e.action === "pull").length;
 
   // License usage
   const licenseUsage = licenses.map((l) => {
@@ -610,9 +459,9 @@ function SyncStatsSection({
   });
 
   const statCards = [
-    { label: "Sesje ogolnie", value: totalSessions.toString(), sub: `${completed.length} ok / ${failed.length} blad` },
-    { label: "Skutecznosc", value: `${successRate}%`, sub: totalSessions > 0 ? `z ${totalSessions} sesji` : "brak danych" },
-    { label: "Sredni czas sync", value: avgDurationSec > 60 ? `${Math.round(avgDurationSec / 60)}m ${avgDurationSec % 60}s` : `${avgDurationSec}s`, sub: `z ${durations.length} sesji` },
+    { label: "Operacje sync", value: totalOps.toString(), sub: `${okEntries.length} ok / ${errorEntries.length} blad` },
+    { label: "Skutecznosc", value: `${successRate}%`, sub: totalOps > 0 ? `z ${totalOps} operacji` : "brak danych" },
+    { label: "Push / Pull", value: `${pushes} / ${pulls}`, sub: "delta + full push" },
     { label: "Aktywne urz.", value: devices.length.toString(), sub: `w ${groups.length} grupach` },
   ];
 
@@ -631,114 +480,29 @@ function SyncStatsSection({
         ))}
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {/* Top devices */}
-        {topDevices.length > 0 && (
-          <div>
-            <h3 className="text-xs font-medium text-zinc-400 mb-2">Najaktywniejsze urzadzenia</h3>
-            <div className="space-y-1.5">
-              {topDevices.map(([deviceId, count]) => {
-                const device = devices.find((d) => d.deviceId === deviceId);
-                return (
-                  <div key={deviceId} className="flex items-center justify-between rounded border border-zinc-800 px-2.5 py-1.5 text-xs">
-                    <span className="font-mono text-zinc-300 truncate max-w-[180px]">
-                      {device?.deviceName || deviceId.slice(0, 16)}
-                    </span>
-                    <span className="text-zinc-400">{count} sync</span>
+      {/* License usage */}
+      {licenseUsage.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-xs font-medium text-zinc-400 mb-2">Uzycie licencji</h3>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {licenseUsage.map((lu) => {
+              const pct = lu.maxDevices > 0 ? Math.round((lu.deviceCount / lu.maxDevices) * 100) : 0;
+              return (
+                <div key={lu.key} className="rounded border border-zinc-800 px-2.5 py-1.5">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-mono text-zinc-300">{lu.key} <span className="text-zinc-500">({lu.plan})</span></span>
+                    <span className="text-zinc-400">{lu.deviceCount}/{lu.maxDevices} urz.</span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* License usage */}
-        {licenseUsage.length > 0 && (
-          <div>
-            <h3 className="text-xs font-medium text-zinc-400 mb-2">Uzycie licencji</h3>
-            <div className="space-y-1.5">
-              {licenseUsage.map((lu) => {
-                const pct = lu.maxDevices > 0 ? Math.round((lu.deviceCount / lu.maxDevices) * 100) : 0;
-                return (
-                  <div key={lu.key} className="rounded border border-zinc-800 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-mono text-zinc-300">{lu.key} <span className="text-zinc-500">({lu.plan})</span></span>
-                      <span className="text-zinc-400">{lu.deviceCount}/{lu.maxDevices} urz.</span>
-                    </div>
-                    <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${pct > 90 ? "bg-amber-500" : "bg-sky-500"}`}
-                        style={{ width: `${Math.min(100, pct)}%` }}
-                      />
-                    </div>
+                  <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${pct > 90 ? "bg-amber-500" : "bg-sky-500"}`}
+                      style={{ width: `${Math.min(100, pct)}%` }}
+                    />
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SyncHistorySection({ sessions }: { sessions: SyncSession[] }) {
-  return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Historia synchronizacji</h2>
-        <div className="flex items-center gap-2">
-          {sessions.length > 0 && <ClearSyncSessionsButton />}
-          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-            ostatnie {sessions.length}
-          </span>
-        </div>
-      </div>
-      {sessions.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak zakonconych sesji.</p>
-      ) : (
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-3 py-2">ID</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Tryb</th>
-                <th className="px-3 py-2">Master</th>
-                <th className="px-3 py-2">Slave</th>
-                <th className="px-3 py-2">Krok</th>
-                <th className="px-3 py-2">Utworzona</th>
-                <th className="px-3 py-2">Zakonczona</th>
-                <th className="px-3 py-2">Blad</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {sessions.map((session) => {
-                const sBadge = sessionStatusBadge(session.status);
-                return (
-                  <tr key={session.id}>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{session.id.slice(0, 8)}</td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${sBadge.className}`}>
-                        {sBadge.label}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">{session.syncMode ?? "\u2014"}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{session.masterDeviceId.slice(0, 12)}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">
-                      {session.slaveDeviceId ? session.slaveDeviceId.slice(0, 12) : "\u2014"}
-                    </td>
-                    <td className="px-3 py-3 text-zinc-300">{session.currentStep}/13</td>
-                    <td className="px-3 py-3 text-zinc-300">{formatDate(session.createdAt)}</td>
-                    <td className="px-3 py-3 text-zinc-300">{formatDate(session.completedAt)}</td>
-                    <td className="px-3 py-3 text-xs text-rose-300 max-w-[200px] truncate">
-                      {session.errorMessage ?? "\u2014"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
         </div>
       )}
     </section>
@@ -831,96 +595,6 @@ function DirectSyncHistorySection({ entries }: { entries: DirectSyncHistoryEntry
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section: Paczki async delta
-// ---------------------------------------------------------------------------
-
-function asyncPackageStatusBadge(status: AsyncPackageStatus): { label: string; className: string } {
-  switch (status) {
-    case "pending":
-      return { label: "Oczekuje", className: "border-amber-500/40 bg-amber-500/10 text-amber-200" };
-    case "delivered":
-      return { label: "Dostarczona", className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" };
-    case "rejected":
-      return { label: "Odrzucona", className: "border-rose-500/40 bg-rose-500/10 text-rose-200" };
-    case "expired":
-      return { label: "Wygasla", className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
-    default:
-      return { label: status, className: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
-  }
-}
-
-function AsyncPackagesSection({ packages }: { packages: AsyncDeltaPackage[] }) {
-  const pending = packages.filter((p) => p.status === "pending");
-  const recent = packages
-    .filter((p) => p.status !== "pending")
-    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
-    .slice(0, 20);
-  const all = [...pending, ...recent];
-
-  return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Paczki async delta</h2>
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
-            {pending.length} oczekujacych
-          </span>
-          <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-zinc-400">
-            {packages.length} razem
-          </span>
-        </div>
-      </div>
-      {all.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Brak paczek async delta.</p>
-      ) : (
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-3 py-2">ID</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Od</th>
-                <th className="px-3 py-2">Grupa</th>
-                <th className="px-3 py-2">Base marker</th>
-                <th className="px-3 py-2">New marker</th>
-                <th className="px-3 py-2">Rozmiar</th>
-                <th className="px-3 py-2">Utworzona</th>
-                <th className="px-3 py-2">Wygasa</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {all.map((pkg) => {
-                const badge = asyncPackageStatusBadge(pkg.status);
-                const isExpired = new Date(pkg.expiresAt).getTime() < Date.now();
-                const sizeMb = (pkg.fileSizeBytes / (1024 * 1024)).toFixed(2);
-                return (
-                  <tr key={pkg.id}>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-200">{pkg.id.slice(0, 8)}</td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${badge.className}`}>
-                        {badge.label}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{pkg.fromDeviceId.slice(0, 10)}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{pkg.groupId.slice(0, 8)}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-400">{pkg.baseMarkerHash ? pkg.baseMarkerHash.slice(0, 10) : "\u2014"}</td>
-                    <td className="px-3 py-3 font-mono text-xs text-zinc-300">{pkg.newMarkerHash.slice(0, 10)}</td>
-                    <td className="px-3 py-3 text-zinc-300">{sizeMb} MB</td>
-                    <td className="px-3 py-3 text-zinc-300">{formatDate(pkg.createdAt)}</td>
-                    <td className={`px-3 py-3 ${isExpired ? "text-rose-300" : "text-zinc-300"}`}>
-                      {formatDate(pkg.expiresAt)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Dashboard (main view)
@@ -961,9 +635,6 @@ function DashboardView({
                 <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-zinc-300">
                   {data.devices.length} dev
                 </span>
-                <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-zinc-300">
-                  {data.activeSessions.length} aktywne
-                </span>
               </div>
               <div className={`rounded-xl border px-4 py-2 text-sm ${
                 sftpHealth.available
@@ -984,15 +655,12 @@ function DashboardView({
           </div>
         </header>
 
-        <SyncStatsSection sessions={data.sessions} devices={data.devices} groups={data.groups} licenses={data.licenses} />
-        <ActiveSessionsSection sessions={data.activeSessions} />
+        <SyncStatsSection directHistory={data.directSyncHistory} devices={data.devices} groups={data.groups} licenses={data.licenses} />
+        <DevicesSection devices={data.devices} />
+        <DirectSyncHistorySection entries={data.directSyncHistory} />
         <LicensesSection licenses={data.licenses} groups={data.groups} />
         <GroupsSection groups={data.groups} storageBackends={data.storageBackends} licenses={data.licenses} />
         <StorageBackendsSection storageBackends={data.storageBackends} />
-        <DevicesSection devices={data.devices} />
-        <AsyncPackagesSection packages={data.asyncPackages} />
-        <SyncHistorySection sessions={data.completedSessions} />
-        <DirectSyncHistorySection entries={data.directSyncHistory} />
 
         <footer className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-500">
           <div className="flex items-center justify-between">

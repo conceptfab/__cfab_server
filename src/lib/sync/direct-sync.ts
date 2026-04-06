@@ -547,7 +547,7 @@ export async function handleDeltaPush(
   // Merge delta data into snapshot
   const data = snapshot.data as Record<string, unknown[]>;
 
-  // Process tombstones first (deletions)
+  // Process tombstones first (deletions) — match by natural keys
   if (delta.tombstones && delta.tombstones.length > 0) {
     for (const tomb of delta.tombstones) {
       const tableName = tomb.table_name;
@@ -556,49 +556,166 @@ export async function handleDeltaPush(
         data[tableName] = arr.filter((row: unknown) => {
           if (typeof row !== "object" || row === null) return true;
           const r = row as Record<string, unknown>;
-          // Match by sync_key if available, else by uuid/id
           if (tomb.sync_key && r.sync_key === tomb.sync_key) return false;
+          if (tomb.sync_key) {
+            // For projects, sync_key is the project name
+            if (tableName === "projects" && r.name === tomb.sync_key)
+              return false;
+          }
           if (tomb.record_uuid && r.uuid === tomb.record_uuid) return false;
-          if (
-            tomb.record_id != null &&
-            String(r.id) === String(tomb.record_id)
-          )
-            return false;
           return true;
         });
       }
     }
   }
 
-  // Merge/upsert each table
-  for (const tableName of [
-    "projects",
-    "applications",
-    "sessions",
-    "manual_sessions",
-  ] as const) {
-    const incoming = delta[tableName];
-    if (!incoming || incoming.length === 0) continue;
+  // ── Build ID remapping from incoming delta → snapshot IDs ──
+  // Projects and applications use natural keys (name / executable_name),
+  // so we must remap incoming IDs to snapshot IDs to keep session references consistent.
 
-    if (!Array.isArray(data[tableName])) {
-      data[tableName] = [];
-    }
-    const existing = data[tableName] as Record<string, unknown>[];
+  // 1. Merge projects by NAME (not by id)
+  if (!Array.isArray(data.projects)) data.projects = [];
+  const snapshotProjects = data.projects as Record<string, unknown>[];
+  const projectIdMap = new Map<string, string>(); // incoming_id → snapshot_id
 
-    for (const row of incoming) {
+  if (delta.projects && delta.projects.length > 0) {
+    for (const row of delta.projects) {
       if (typeof row !== "object" || row === null) continue;
       const r = row as Record<string, unknown>;
-      const idx = existing.findIndex((e) => {
-        if (r.sync_key && e.sync_key === r.sync_key) return true;
-        if (r.uuid && e.uuid === r.uuid) return true;
-        if (r.id != null && e.id != null && String(r.id) === String(e.id))
-          return true;
-        return false;
-      });
+      const incomingName = String(r.name ?? "").trim().toLowerCase();
+      if (!incomingName) continue;
+
+      const idx = snapshotProjects.findIndex(
+        (e) => String(e.name ?? "").trim().toLowerCase() === incomingName,
+      );
       if (idx >= 0) {
-        existing[idx] = { ...existing[idx], ...r };
+        // Keep snapshot id, merge other fields from incoming
+        const snapshotId = snapshotProjects[idx].id;
+        snapshotProjects[idx] = { ...snapshotProjects[idx], ...r, id: snapshotId };
+        projectIdMap.set(String(r.id), String(snapshotId));
       } else {
-        existing.push(r);
+        // New project — keep incoming id
+        snapshotProjects.push(r);
+        projectIdMap.set(String(r.id), String(r.id));
+      }
+    }
+  }
+
+  // 2. Merge applications by EXECUTABLE_NAME (not by id)
+  if (!Array.isArray(data.applications)) data.applications = [];
+  const snapshotApps = data.applications as Record<string, unknown>[];
+  const appIdMap = new Map<string, string>(); // incoming_id → snapshot_id
+
+  if (delta.applications && delta.applications.length > 0) {
+    for (const row of delta.applications) {
+      if (typeof row !== "object" || row === null) continue;
+      const r = row as Record<string, unknown>;
+      const incomingExe = String(r.executable_name ?? "").trim().toLowerCase();
+      if (!incomingExe) continue;
+
+      const idx = snapshotApps.findIndex(
+        (e) =>
+          String(e.executable_name ?? "").trim().toLowerCase() === incomingExe,
+      );
+      if (idx >= 0) {
+        const snapshotId = snapshotApps[idx].id;
+        // Remap project_id on the application to snapshot's project id
+        const remappedProjectId =
+          r.project_id != null
+            ? projectIdMap.get(String(r.project_id)) ?? r.project_id
+            : r.project_id;
+        snapshotApps[idx] = {
+          ...snapshotApps[idx],
+          ...r,
+          id: snapshotId,
+          project_id: remappedProjectId,
+        };
+        appIdMap.set(String(r.id), String(snapshotId));
+      } else {
+        // New application — remap project_id, keep incoming id
+        const remappedProjectId =
+          r.project_id != null
+            ? projectIdMap.get(String(r.project_id)) ?? r.project_id
+            : r.project_id;
+        snapshotApps.push({ ...r, project_id: remappedProjectId });
+        appIdMap.set(String(r.id), String(r.id));
+      }
+    }
+  }
+
+  // 3. Merge sessions by remapped APP_ID + START_TIME (not by id)
+  if (!Array.isArray(data.sessions)) data.sessions = [];
+  const snapshotSessions = data.sessions as Record<string, unknown>[];
+
+  if (delta.sessions && delta.sessions.length > 0) {
+    for (const row of delta.sessions) {
+      if (typeof row !== "object" || row === null) continue;
+      const r = row as Record<string, unknown>;
+
+      // Remap app_id and project_id to snapshot IDs
+      const remappedAppId =
+        r.app_id != null
+          ? appIdMap.get(String(r.app_id)) ?? r.app_id
+          : r.app_id;
+      const remappedProjectId =
+        r.project_id != null
+          ? projectIdMap.get(String(r.project_id)) ?? r.project_id
+          : r.project_id;
+
+      const mapped = {
+        ...r,
+        app_id: remappedAppId,
+        project_id: remappedProjectId,
+      };
+
+      // Match by remapped app_id + start_time (natural composite key)
+      const idx = snapshotSessions.findIndex(
+        (e) =>
+          String(e.app_id) === String(remappedAppId) &&
+          e.start_time === r.start_time,
+      );
+      if (idx >= 0) {
+        const snapshotId = snapshotSessions[idx].id;
+        snapshotSessions[idx] = { ...snapshotSessions[idx], ...mapped, id: snapshotId };
+      } else {
+        snapshotSessions.push(mapped);
+      }
+    }
+  }
+
+  // 4. Merge manual_sessions by SYNC_KEY (already correct)
+  if (!Array.isArray(data.manual_sessions)) data.manual_sessions = [];
+  const snapshotManual = data.manual_sessions as Record<string, unknown>[];
+
+  if (delta.manual_sessions && delta.manual_sessions.length > 0) {
+    for (const row of delta.manual_sessions) {
+      if (typeof row !== "object" || row === null) continue;
+      const r = row as Record<string, unknown>;
+
+      // Remap project_id and app_id
+      const remappedProjectId =
+        r.project_id != null
+          ? projectIdMap.get(String(r.project_id)) ?? r.project_id
+          : r.project_id;
+      const remappedAppId =
+        r.app_id != null
+          ? appIdMap.get(String(r.app_id)) ?? r.app_id
+          : r.app_id;
+
+      const mapped = {
+        ...r,
+        project_id: remappedProjectId,
+        app_id: remappedAppId,
+      };
+
+      const idx = snapshotManual.findIndex(
+        (e) => r.sync_key && e.sync_key === r.sync_key,
+      );
+      if (idx >= 0) {
+        const snapshotId = snapshotManual[idx].id;
+        snapshotManual[idx] = { ...snapshotManual[idx], ...mapped, id: snapshotId };
+      } else {
+        snapshotManual.push(mapped);
       }
     }
   }
