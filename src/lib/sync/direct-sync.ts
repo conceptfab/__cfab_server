@@ -345,8 +345,8 @@ export async function handleStatus(
     }
   }
 
-  // Same revision, different hash — hash drift, don't push
-  return reply("idle", "same_revision_hash_drift");
+  // Same revision, different hash — client has diverged data, request delta push
+  return reply("send_delta", "same_revision_hash_drift");
 }
 
 export async function handlePush(
