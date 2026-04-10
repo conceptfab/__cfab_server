@@ -934,7 +934,7 @@ export interface TestRoundtripBody {
 export interface TestRoundtripResponse {
   ok: true;
   steps: {
-    write: { success: boolean; path: string; sizeBytes: number; diskBytes: number };
+    write: { success: boolean; sizeBytes: number; diskBytes: number };
     read: { success: boolean; matches: boolean };
     cleanup: { success: boolean };
   };
