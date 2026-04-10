@@ -365,6 +365,10 @@ export async function registerDevice(
 /**
  * Update lastSeenAt for a known device (called on every authenticated sync request).
  * Fire-and-forget — failures are silently ignored so sync flow is not blocked.
+ *
+ * NOTE: This reads/writes the entire store file on every call. If traffic
+ * grows, consider batching updates or using a lightweight in-memory cache
+ * with periodic flushes.
  */
 export async function touchDeviceLastSeen(deviceId: string): Promise<void> {
   return withMutex(async () => {
@@ -407,6 +411,13 @@ export async function getDevicesForLicense(licenseId: string): Promise<DeviceReg
   return withMutex(async () => {
     const store = await readStore();
     return Object.values(store.devices).filter((d) => d.licenseId === licenseId);
+  });
+}
+
+export async function getAllDevices(): Promise<DeviceRegistration[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.devices);
   });
 }
 

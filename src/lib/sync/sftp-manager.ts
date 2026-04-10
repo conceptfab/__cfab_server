@@ -509,7 +509,7 @@ function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
     getConnectionInfo(sessionId: string): StorageConnectionInfo {
       const sessionPath = `${config.basePath}${sessionId}`;
       return {
-        protocol: "sftp",
+        protocol: "ftp",
         host: config.host,
         port: config.port,
         username: config.username,

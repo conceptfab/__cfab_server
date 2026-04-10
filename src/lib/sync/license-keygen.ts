@@ -4,11 +4,20 @@ import type { LicensePlan } from "./license-contracts";
 const CHARSET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 
 function randomSegment(length: number): string {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => CHARSET[b % CHARSET.length])
-    .join("");
+  // Rejection sampling to avoid modulo bias (256 % 31 ≠ 0)
+  const maxUnbiased = 256 - (256 % CHARSET.length); // 248
+  const result: string[] = [];
+  while (result.length < length) {
+    const bytes = new Uint8Array(length - result.length + 4);
+    crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < maxUnbiased) {
+        result.push(CHARSET[b % CHARSET.length]);
+        if (result.length === length) break;
+      }
+    }
+  }
+  return result.join("");
 }
 
 function crc16(input: string): number {

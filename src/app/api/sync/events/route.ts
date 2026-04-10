@@ -57,6 +57,12 @@ export async function GET(request: Request): Promise<Response> {
   let unsubscribe: (() => void) | null = null;
   let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
+  const cleanup = () => {
+    log("info", "sync.sse.disconnected", { requestId, userId, deviceId });
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+  };
+
   const stream = new ReadableStream({
     start(controller) {
       // Send initial connected event
@@ -72,6 +78,7 @@ export async function GET(request: Request): Promise<Response> {
           );
         } catch {
           // Stream closed
+          cleanup();
         }
       });
 
@@ -81,13 +88,18 @@ export async function GET(request: Request): Promise<Response> {
           controller.enqueue(encoder.encode(": keepalive\n\n"));
         } catch {
           // Stream closed
+          cleanup();
         }
       }, 30_000);
+
+      // Listen for client disconnect via abort signal to prevent listener leak
+      request.signal.addEventListener("abort", () => {
+        try { controller.close(); } catch { /* already closed */ }
+        cleanup();
+      });
     },
     cancel() {
-      log("info", "sync.sse.disconnected", { requestId, userId, deviceId });
-      if (unsubscribe) unsubscribe();
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      cleanup();
     },
   });
 

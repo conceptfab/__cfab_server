@@ -36,6 +36,8 @@ interface UserLicenseContext {
 
 async function resolveLicenseContext(userId: string, deviceId: string): Promise<UserLicenseContext | null> {
   const groups = await getAllGroups();
+  // NOTE: Currently assumes 1 user = 1 group. If multi-group support is added,
+  // this needs to accept a groupId parameter or return all matching groups.
   const group = groups.find((g) => g.ownerId === userId);
   if (!group) return null;
 

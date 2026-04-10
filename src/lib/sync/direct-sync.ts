@@ -7,7 +7,7 @@
  *   DATA_DIR/online-sync/_history.json            — recent sync history entries
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import path from "node:path";
@@ -155,7 +155,7 @@ export interface DeltaPushResponse {
   accepted: boolean;
   revision: number;
   snapshotHash: string | null;
-  serverTableHashes: TableHashes;
+  serverTableHashes: TableHashes | null;
   reason: string;
 }
 
@@ -208,7 +208,9 @@ async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 async function writeJson(filePath: string, data: unknown): Promise<void> {
-  await writeFile(filePath, JSON.stringify(data), "utf8");
+  const tmpFile = `${filePath}.${Date.now()}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(data), "utf8");
+  await rename(tmpFile, filePath);
 }
 
 /** Write snapshot as gzip-compressed JSON (.json.gz) */

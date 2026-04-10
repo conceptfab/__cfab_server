@@ -84,7 +84,7 @@ export async function getAllOnlineSyncUsers(): Promise<OnlineSyncUserSummary[]> 
 
       let snapshotSizeBytes = 0;
       try {
-        const s = await stat(path.join(REPO_DIR, userId, "snapshot.json"));
+        const s = await stat(path.join(REPO_DIR, userId, "snapshot.json.gz"));
         snapshotSizeBytes = s.size;
       } catch {}
 

@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { badRequest, forbidden } from "@/lib/http/error";
+import { badRequest, forbidden, tooManyRequests } from "@/lib/http/error";
 import { validateKeyFormat } from "@/lib/sync/license-keygen";
 import {
   findLicenseByKey,
@@ -10,8 +10,9 @@ import {
   registerDevice,
 } from "@/lib/sync/license-store";
 import { getOrCreateRequestId, REQUEST_ID_HEADER } from "@/lib/observability/request-id";
-import { parseJsonBody } from "@/lib/http/request";
+import { getClientIp, parseJsonBody } from "@/lib/http/request";
 import { log } from "@/lib/observability/logger";
+import { checkRateLimit } from "@/lib/security/rate-limit";
 
 export async function POST(request: Request) {
   const requestId = getOrCreateRequestId(request);
@@ -24,6 +25,13 @@ export async function POST(request: Request) {
   };
 
   try {
+    // Rate limit: 5 attempts per minute per IP
+    const clientIp = getClientIp(request) ?? "unknown";
+    const rl = checkRateLimit(`license-activate:${clientIp}`, 5, 60_000);
+    if (!rl.allowed) {
+      throw tooManyRequests(`Rate limit exceeded. Try again in ${Math.ceil(rl.retryAfterMs / 1000)}s.`);
+    }
+
     const { body } = await parseJsonBody(request, 64 * 1024);
     const raw = body as Record<string, unknown>;
 
@@ -35,12 +43,12 @@ export async function POST(request: Request) {
     if (!deviceId) throw badRequest("deviceId is required");
 
     if (!validateKeyFormat(licenseKey)) {
-      throw badRequest("Invalid license key format");
+      throw badRequest("Invalid or unknown license key");
     }
 
     const license = await findLicenseByKey(licenseKey);
     if (!license) {
-      throw badRequest("License key not found");
+      throw badRequest("Invalid or unknown license key");
     }
 
     if (license.status !== "active" && license.status !== "trial") {
