@@ -774,7 +774,7 @@ async function handleDeltaPushInner(
           ? appIdMap.get(String(r.app_id)) ?? r.app_id
           : r.app_id;
 
-      const mapped = {
+      const mapped: Record<string, unknown> = {
         ...r,
         project_id: remappedProjectId,
         app_id: remappedAppId,
