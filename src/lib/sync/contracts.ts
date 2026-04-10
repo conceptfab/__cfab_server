@@ -11,6 +11,8 @@ export interface TableHashes {
   applications: string;
   sessions: string;
   manual_sessions: string;
+  assignment_feedback?: string;
+  assignment_auto_runs?: string;
 }
 
 export interface DeltaData {
@@ -25,4 +27,6 @@ export interface DeltaData {
     deleted_at: string;
     sync_key: string;
   }[];
+  assignment_feedback?: any[];
+  assignment_auto_runs?: any[];
 }

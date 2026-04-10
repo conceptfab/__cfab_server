@@ -339,7 +339,9 @@ export async function handleStatus(
       body.tableHashes.projects === meta.tableHashes.projects &&
       body.tableHashes.applications === meta.tableHashes.applications &&
       body.tableHashes.sessions === meta.tableHashes.sessions &&
-      body.tableHashes.manual_sessions === meta.tableHashes.manual_sessions;
+      body.tableHashes.manual_sessions === meta.tableHashes.manual_sessions &&
+      (body.tableHashes.assignment_feedback ?? "") === (meta.tableHashes.assignment_feedback ?? "") &&
+      (body.tableHashes.assignment_auto_runs ?? "") === (meta.tableHashes.assignment_auto_runs ?? "");
     if (tablesMatch) {
       return reply("idle", "table_hashes_match");
     }
@@ -518,7 +520,9 @@ export async function handleDeltaPush(
     (delta.applications?.length ?? 0) > 0 ||
     (delta.sessions?.length ?? 0) > 0 ||
     (delta.manual_sessions?.length ?? 0) > 0 ||
-    (delta.tombstones?.length ?? 0) > 0;
+    (delta.tombstones?.length ?? 0) > 0 ||
+    (delta.assignment_feedback?.length ?? 0) > 0 ||
+    (delta.assignment_auto_runs?.length ?? 0) > 0;
 
   if (!hasChanges) {
     // Nothing to merge — return current state without bumping revision
@@ -716,6 +720,42 @@ export async function handleDeltaPush(
         snapshotManual[idx] = { ...snapshotManual[idx], ...mapped, id: snapshotId };
       } else {
         snapshotManual.push(mapped);
+      }
+    }
+  }
+
+  // 5. Merge assignment_feedback by created_at (append new, no ID remapping needed server-side)
+  if (delta.assignment_feedback && delta.assignment_feedback.length > 0) {
+    if (!Array.isArray(data.assignment_feedback)) data.assignment_feedback = [];
+    const existing = data.assignment_feedback as Record<string, unknown>[];
+    const existingKeys = new Set(
+      existing.map((r) => `${r.source}|${r.created_at}`),
+    );
+    for (const row of delta.assignment_feedback) {
+      if (typeof row !== "object" || row === null) continue;
+      const r = row as Record<string, unknown>;
+      const key = `${r.source}|${r.created_at}`;
+      if (!existingKeys.has(key)) {
+        existing.push(r);
+        existingKeys.add(key);
+      }
+    }
+  }
+
+  // 6. Merge assignment_auto_runs by started_at (append new)
+  if (delta.assignment_auto_runs && delta.assignment_auto_runs.length > 0) {
+    if (!Array.isArray(data.assignment_auto_runs)) data.assignment_auto_runs = [];
+    const existing = data.assignment_auto_runs as Record<string, unknown>[];
+    const existingKeys = new Set(
+      existing.map((r) => String(r.started_at)),
+    );
+    for (const row of delta.assignment_auto_runs) {
+      if (typeof row !== "object" || row === null) continue;
+      const r = row as Record<string, unknown>;
+      const key = String(r.started_at);
+      if (!existingKeys.has(key)) {
+        existing.push(r);
+        existingKeys.add(key);
       }
     }
   }
