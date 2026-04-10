@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -78,7 +78,10 @@ async function readStore(): Promise<LicenseStoreFile> {
 
 async function writeStore(store: LicenseStoreFile): Promise<void> {
   await ensureDataDir();
-  await writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf8");
+  // Atomic write: write to temp file then rename to prevent corruption on crash
+  const tmpFile = `${STORE_FILE}.${Date.now()}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(store, null, 2), "utf8");
+  await rename(tmpFile, STORE_FILE);
 }
 
 // ---------------------------------------------------------------------------

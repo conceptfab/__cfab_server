@@ -27,6 +27,31 @@ const HISTORY_FILE = path.join(REPO_DIR, "_history.json");
 const MAX_HISTORY_ENTRIES = 100;
 
 // ---------------------------------------------------------------------------
+// Per-user mutex — prevents concurrent read-modify-write on the same user
+// ---------------------------------------------------------------------------
+
+const userMutexes = new Map<string, Promise<void>>();
+
+async function withUserMutex<T>(userId: string, work: () => Promise<T>): Promise<T> {
+  const previous = userMutexes.get(userId) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  userMutexes.set(userId, next);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    // Clean up entry if no one is waiting
+    if (userMutexes.get(userId) === next) {
+      userMutexes.delete(userId);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -353,6 +378,13 @@ export async function handlePush(
   userId: string,
   body: PushBody,
 ): Promise<PushResponse> {
+  return withUserMutex(userId, () => handlePushInner(userId, body));
+}
+
+async function handlePushInner(
+  userId: string,
+  body: PushBody,
+): Promise<PushResponse> {
   const dir = userDir(userId);
   await ensureDir(dir);
 
@@ -426,6 +458,13 @@ export async function handlePush(
 }
 
 export async function handleDeltaPull(
+  userId: string,
+  body: DeltaPullBody,
+): Promise<DeltaPullResponse> {
+  return withUserMutex(userId, () => handleDeltaPullInner(userId, body));
+}
+
+async function handleDeltaPullInner(
   userId: string,
   body: DeltaPullBody,
 ): Promise<DeltaPullResponse> {
@@ -505,11 +544,36 @@ export async function handleDeltaPush(
   userId: string,
   body: DeltaPushBody,
 ): Promise<DeltaPushResponse> {
+  return withUserMutex(userId, () => handleDeltaPushInner(userId, body));
+}
+
+async function handleDeltaPushInner(
+  userId: string,
+  body: DeltaPushBody,
+): Promise<DeltaPushResponse> {
   const dir = userDir(userId);
   await ensureDir(dir);
 
   const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
   const currentRevision = meta?.revision ?? 0;
+
+  // SV-W1: Reject delta if baseRevision is stale (another device pushed in the meantime)
+  if (body.baseRevision !== undefined && body.baseRevision !== null && body.baseRevision < currentRevision) {
+    log("warn", "direct-sync.delta-push.stale-base-revision", {
+      userId,
+      deviceId: body.deviceId,
+      baseRevision: body.baseRevision,
+      currentRevision,
+    });
+    return {
+      ok: true,
+      accepted: false,
+      revision: currentRevision,
+      snapshotHash: meta?.payloadSha256 ?? null,
+      serverTableHashes: meta?.tableHashes ?? null,
+      reason: "stale_base_revision",
+    };
+  }
 
   // Check if delta is empty (no changes to apply)
   const delta = body.delta;
@@ -675,8 +739,14 @@ export async function handleDeltaPush(
           e.start_time === r.start_time,
       );
       if (idx >= 0) {
-        const snapshotId = snapshotSessions[idx].id;
-        snapshotSessions[idx] = { ...snapshotSessions[idx], ...mapped, id: snapshotId };
+        // SV-W2: Take the newer record by updated_at to prevent data loss
+        const existing = snapshotSessions[idx];
+        const existingUpdated = String(existing.updated_at ?? existing.end_time ?? "");
+        const incomingUpdated = String(mapped.updated_at ?? mapped.end_time ?? "");
+        if (incomingUpdated >= existingUpdated) {
+          const snapshotId = existing.id;
+          snapshotSessions[idx] = { ...existing, ...mapped, id: snapshotId };
+        }
       } else {
         snapshotSessions.push(mapped);
       }
@@ -712,8 +782,14 @@ export async function handleDeltaPush(
         (e) => r.sync_key && e.sync_key === r.sync_key,
       );
       if (idx >= 0) {
-        const snapshotId = snapshotManual[idx].id;
-        snapshotManual[idx] = { ...snapshotManual[idx], ...mapped, id: snapshotId };
+        // SV-W2: Take the newer record by updated_at
+        const existing = snapshotManual[idx];
+        const existingUpdated = String(existing.updated_at ?? "");
+        const incomingUpdated = String(mapped.updated_at ?? "");
+        if (incomingUpdated >= existingUpdated) {
+          const snapshotId = existing.id;
+          snapshotManual[idx] = { ...existing, ...mapped, id: snapshotId };
+        }
       } else {
         snapshotManual.push(mapped);
       }
@@ -959,7 +1035,7 @@ export async function handleTestRoundtrip(
   return {
     ok: true,
     steps: {
-      write: { success: writeOk, path: testFile, sizeBytes: envelopeStr.length, diskBytes },
+      write: { success: writeOk, sizeBytes: envelopeStr.length, diskBytes },
       read: { success: readOk, matches },
       cleanup: { success: cleanupOk },
     },

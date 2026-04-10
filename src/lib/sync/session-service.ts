@@ -16,6 +16,7 @@ import {
   findAndJoinOrCreate,
   stepToPhase,
   updateSessionStorage,
+  updateSessionSyncMode,
   withValidatedSession,
 } from "@/lib/sync/session-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
@@ -136,6 +137,7 @@ export async function handleSessionCreate(
   // Force full sync override (requested by client via tray menu)
   if (body.forceFullSync && session.syncMode) {
     session.syncMode = "full";
+    await updateSessionSyncMode(session.id, "full");
   }
 
   if (role === "slave") {

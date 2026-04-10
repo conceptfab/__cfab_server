@@ -7,19 +7,39 @@ import { parseJsonBody } from "@/lib/http/request";
 import { log, logError } from "@/lib/observability/logger";
 import { REQUEST_ID_HEADER, getOrCreateRequestId } from "@/lib/observability/request-id";
 
-function buildHeaders(requestId: string): HeadersInit {
+function resolveCorsOrigin(request?: Request): string | null {
+  const origin = request?.headers.get("origin")?.trim();
+  if (!origin) return null;
+
+  const env = getEnv();
+  if (env.syncAllowedOrigins.length === 0 || env.syncAllowedOrigins.includes("*")) {
+    return "*";
+  }
+
+  return env.syncAllowedOrigins.includes(origin) ? origin : null;
+}
+
+function buildHeaders(requestId: string, request?: Request): HeadersInit {
+  const allowOrigin = resolveCorsOrigin(request);
+  const corsHeaders: Record<string, string> = allowOrigin
+    ? {
+        "access-control-allow-origin": allowOrigin,
+        "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+        "access-control-allow-headers": "authorization, content-type, content-encoding, x-request-id",
+        "access-control-expose-headers": REQUEST_ID_HEADER,
+        ...(allowOrigin !== "*" ? { vary: "Origin" } : {}),
+      }
+    : {};
+
   return {
     [REQUEST_ID_HEADER]: requestId,
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "authorization, content-type, content-encoding, x-request-id",
-    "access-control-expose-headers": REQUEST_ID_HEADER,
+    ...corsHeaders,
   };
 }
 
-function responseFromError(error: unknown, requestId: string): NextResponse {
+function responseFromError(error: unknown, requestId: string, request?: Request): NextResponse {
   const env = getEnv();
   const appError = isAppError(error) ? error : internalServerError();
 
@@ -37,15 +57,15 @@ function responseFromError(error: unknown, requestId: string): NextResponse {
     },
     {
       status: appError.status,
-      headers: buildHeaders(requestId),
+      headers: buildHeaders(requestId, request),
     },
   );
 }
 
-export async function handleAdminOptions(): Promise<NextResponse> {
+export async function handleAdminOptions(request?: Request): Promise<NextResponse> {
   return new NextResponse(null, {
     status: 204,
-    headers: buildHeaders(""),
+    headers: buildHeaders("", request),
   });
 }
 
@@ -70,7 +90,7 @@ export async function handleAdminPost<TBody, TResponse>(
       latencyMs: Date.now() - startedAt,
     });
 
-    return NextResponse.json(result, { headers: buildHeaders(requestId) });
+    return NextResponse.json(result, { headers: buildHeaders(requestId, request) });
   } catch (error) {
     log(
       isAppError(error) && error.status < 500 ? "warn" : "error",
@@ -82,7 +102,7 @@ export async function handleAdminPost<TBody, TResponse>(
         ...(isAppError(error) ? { status: error.status, code: error.code } : {}),
       },
     );
-    return responseFromError(error, requestId);
+    return responseFromError(error, requestId, request);
   }
 }
 
@@ -104,7 +124,7 @@ export async function handleAdminGet<TResponse>(
       latencyMs: Date.now() - startedAt,
     });
 
-    return NextResponse.json(result, { headers: buildHeaders(requestId) });
+    return NextResponse.json(result, { headers: buildHeaders(requestId, request) });
   } catch (error) {
     log(
       isAppError(error) && error.status < 500 ? "warn" : "error",
@@ -116,7 +136,7 @@ export async function handleAdminGet<TResponse>(
         ...(isAppError(error) ? { status: error.status, code: error.code } : {}),
       },
     );
-    return responseFromError(error, requestId);
+    return responseFromError(error, requestId, request);
   }
 }
 
