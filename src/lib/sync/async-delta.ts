@@ -179,6 +179,14 @@ export async function handleAsyncAck(
   if (!pkg) {
     throw new Error(`Package not found: ${packageId}`);
   }
+
+  // Verify user owns the group
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.id === pkg.groupId);
+  if (!group || group.ownerId !== userId) {
+    throw new Error("Not authorized for this group");
+  }
+
   if (pkg.status !== "pending") {
     return { ok: true, acknowledged: false };
   }
@@ -218,6 +226,14 @@ export async function handleAsyncReject(
   if (!pkg) {
     throw new Error(`Package not found: ${packageId}`);
   }
+
+  // Verify user owns the group
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.id === pkg.groupId);
+  if (!group || group.ownerId !== userId) {
+    throw new Error("Not authorized for this group");
+  }
+
   if (pkg.status !== "pending") {
     return { ok: true, rejected: false };
   }
@@ -258,6 +274,14 @@ export async function handleAsyncCredentials(
   if (!pkg) {
     throw new Error(`Package not found: ${packageId}`);
   }
+
+  // Verify user owns the group
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.id === pkg.groupId);
+  if (!group || group.ownerId !== userId) {
+    throw new Error("Not authorized for this group");
+  }
+
   if (pkg.status !== "pending") {
     throw new Error(`Package ${packageId} is not pending (status: ${pkg.status})`);
   }

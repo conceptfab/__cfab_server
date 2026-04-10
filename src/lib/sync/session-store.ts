@@ -495,6 +495,16 @@ export async function withValidatedSession(
 }
 
 // ---------------------------------------------------------------------------
+export async function updateSessionSyncMode(
+  sessionId: string,
+  syncMode: string,
+): Promise<void> {
+  await prisma.syncSession.update({
+    where: { id: sessionId },
+    data: { syncMode },
+  });
+}
+
 // Storage helpers
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -78,7 +78,10 @@ async function readStore(): Promise<LicenseStoreFile> {
 
 async function writeStore(store: LicenseStoreFile): Promise<void> {
   await ensureDataDir();
-  await writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf8");
+  // Atomic write: write to temp file then rename to prevent corruption on crash
+  const tmpFile = `${STORE_FILE}.${Date.now()}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(store, null, 2), "utf8");
+  await rename(tmpFile, STORE_FILE);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +365,10 @@ export async function registerDevice(
 /**
  * Update lastSeenAt for a known device (called on every authenticated sync request).
  * Fire-and-forget — failures are silently ignored so sync flow is not blocked.
+ *
+ * NOTE: This reads/writes the entire store file on every call. If traffic
+ * grows, consider batching updates or using a lightweight in-memory cache
+ * with periodic flushes.
  */
 export async function touchDeviceLastSeen(deviceId: string): Promise<void> {
   return withMutex(async () => {
@@ -404,6 +411,13 @@ export async function getDevicesForLicense(licenseId: string): Promise<DeviceReg
   return withMutex(async () => {
     const store = await readStore();
     return Object.values(store.devices).filter((d) => d.licenseId === licenseId);
+  });
+}
+
+export async function getAllDevices(): Promise<DeviceRegistration[]> {
+  return withMutex(async () => {
+    const store = await readStore();
+    return Object.values(store.devices);
   });
 }
 
