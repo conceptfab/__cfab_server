@@ -16,8 +16,7 @@ import {
 } from "@/lib/auth/dashboard-page-auth";
 import { parseDashboardView } from "@/lib/dashboard/navigation";
 import { buildDashboardOverview } from "@/lib/dashboard/overview";
-import { getDashboardData } from "@/lib/sync/dashboard";
-import { healthCheck } from "@/lib/sync/sftp-manager";
+import { getDashboardData, getDashboardStorageHealth } from "@/lib/sync/dashboard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,7 +78,7 @@ export default async function Home({ searchParams }: HomePageProps) {
 
     const [data, storageHealth] = await Promise.all([
       getDashboardData(),
-      healthCheck(),
+      getDashboardStorageHealth(),
     ]);
     const view = parseDashboardView(getFirstQueryValue(resolvedSearchParams.view));
     const overview = buildDashboardOverview(
