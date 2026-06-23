@@ -34,7 +34,7 @@ interface UserLicenseContext {
   device: DeviceRegistration | null;
 }
 
-async function resolveLicenseContext(userId: string, deviceId: string): Promise<UserLicenseContext | null> {
+async function resolveLicenseContext(userId: string): Promise<UserLicenseContext | null> {
   const groups = await getAllGroups();
   // NOTE: Currently assumes 1 user = 1 group. If multi-group support is added,
   // this needs to accept a groupId parameter or return all matching groups.
@@ -109,7 +109,7 @@ export async function handleSessionCreate(
   body: SessionCreateBody,
 ): Promise<SessionCreateResponse> {
   // License enforcement: if user has a license context, validate it
-  const licenseCtx = await resolveLicenseContext(userId, body.deviceId);
+  const licenseCtx = await resolveLicenseContext(userId);
   if (licenseCtx) {
     const { license, group } = licenseCtx;
     // Build a minimal device registration for validation

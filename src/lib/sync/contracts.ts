@@ -16,10 +16,10 @@ export interface TableHashes {
 }
 
 export interface DeltaData {
-  projects: any[];
-  applications: any[];
-  sessions: any[];
-  manual_sessions: any[];
+  projects: Record<string, JsonValue>[];
+  applications: Record<string, JsonValue>[];
+  sessions: Record<string, JsonValue>[];
+  manual_sessions: Record<string, JsonValue>[];
   tombstones: {
     table_name: string;
     record_id: number | string | null;
@@ -27,6 +27,6 @@ export interface DeltaData {
     deleted_at: string;
     sync_key: string;
   }[];
-  assignment_feedback?: any[];
-  assignment_auto_runs?: any[];
+  assignment_feedback?: Record<string, JsonValue>[];
+  assignment_auto_runs?: Record<string, JsonValue>[];
 }

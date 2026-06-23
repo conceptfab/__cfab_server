@@ -79,7 +79,7 @@ function runCleanup(): void {
       // 6. Expire and cleanup async delta packages
       const asyncExpired = await expireAsyncPackages();
       const cleanableAsync = await getCleanableAsyncPackageIds();
-      for (const { id, storagePath } of cleanableAsync) {
+      for (const { id } of cleanableAsync) {
         try {
           await deleteSessionDir(`async/${id}`);
         } catch (err) {

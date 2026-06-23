@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useReducer, useRef, useState } from "react";
+
+import { DashboardDrawer } from "@/components/dashboard/dashboard-drawer";
 
 // ---------------------------------------------------------------------------
 // CreateLicenseForm
@@ -18,14 +20,36 @@ interface CreateResult {
   error?: string;
 }
 
+interface LicenseFormState {
+  plan: string;
+  maxDevices: number;
+  groupMode: "existing" | "new";
+  groupId: string;
+  groupName: string;
+}
+
+type LicenseFormAction = {
+  [Key in keyof LicenseFormState]: {
+    field: Key;
+    value: LicenseFormState[Key];
+  };
+}[keyof LicenseFormState];
+
+function licenseFormReducer(
+  state: LicenseFormState,
+  action: LicenseFormAction,
+): LicenseFormState {
+  return { ...state, [action.field]: action.value };
+}
+
 export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
-  const [plan, setPlan] = useState("pro");
-  const [maxDevices, setMaxDevices] = useState(5);
-  const [groupMode, setGroupMode] = useState<"existing" | "new">(
-    groups.length > 0 ? "existing" : "new",
-  );
-  const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
-  const [groupName, setGroupName] = useState("");
+  const [form, updateForm] = useReducer(licenseFormReducer, {
+    plan: "pro",
+    maxDevices: 5,
+    groupMode: groups.length > 0 ? "existing" : "new",
+    groupId: groups[0]?.id ?? "",
+    groupName: "",
+  });
   const [creating, setCreating] = useState(false);
   const [result, setResult] = useState<CreateResult | null>(null);
   const [copied, setCopied] = useState(false);
@@ -43,11 +67,14 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
     setCopied(false);
 
     try {
-      const body: Record<string, unknown> = { plan, maxDevices };
-      if (groupMode === "existing" && groupId) {
-        body.groupId = groupId;
-      } else if (groupMode === "new" && groupName.trim()) {
-        body.groupName = groupName.trim();
+      const body: Record<string, unknown> = {
+        plan: form.plan,
+        maxDevices: form.maxDevices,
+      };
+      if (form.groupMode === "existing" && form.groupId) {
+        body.groupId = form.groupId;
+      } else if (form.groupMode === "new" && form.groupName.trim()) {
+        body.groupName = form.groupName.trim();
       }
 
       const res = await fetch("/api/admin/license", {
@@ -59,9 +86,9 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
 
       if (json.ok && json.license) {
         const gName =
-          groupMode === "new"
-            ? groupName.trim()
-            : groups.find((g) => g.id === groupId)?.name ?? groupId;
+          form.groupMode === "new"
+            ? form.groupName.trim()
+            : groups.find((g) => g.id === form.groupId)?.name ?? form.groupId;
         setResult({
           ok: true,
           licenseKey: json.license.licenseKey,
@@ -105,7 +132,8 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
   }
 
   return (
-    <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-800/50 p-4">
+    <DashboardDrawer title="Nowa licencja" triggerLabel="Nowa licencja">
+    <div className="dashboard-form">
       <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-400">
         Nowa licencja
       </h3>
@@ -115,8 +143,8 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
         <label className="grid gap-1 text-xs text-zinc-400">
           Plan
           <select
-            value={plan}
-            onChange={(e) => setPlan(e.target.value)}
+              value={form.plan}
+              onChange={(e) => updateForm({ field: "plan", value: e.target.value })}
             className="h-9 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
           >
             <option value="free">Free</option>
@@ -133,8 +161,8 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
             type="number"
             min={1}
             max={9999}
-            value={maxDevices}
-            onChange={(e) => setMaxDevices(Number(e.target.value) || 1)}
+            value={form.maxDevices}
+            onChange={(e) => updateForm({ field: "maxDevices", value: Number(e.target.value) || 1 })}
             className="h-9 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
           />
         </label>
@@ -144,18 +172,18 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
           Grupa
           <div className="flex items-center gap-2">
             <select
-              value={groupMode}
-              onChange={(e) => setGroupMode(e.target.value as "existing" | "new")}
+              value={form.groupMode}
+              onChange={(e) => updateForm({ field: "groupMode", value: e.target.value as "existing" | "new" })}
               className="h-9 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
             >
               {groups.length > 0 && <option value="existing">Istniejaca</option>}
               <option value="new">Nowa</option>
             </select>
 
-            {groupMode === "existing" && groups.length > 0 ? (
+            {form.groupMode === "existing" && groups.length > 0 ? (
               <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
+                value={form.groupId}
+                onChange={(e) => updateForm({ field: "groupId", value: e.target.value })}
                 className="h-9 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
               >
                 {groups.map((g) => (
@@ -167,8 +195,8 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
             ) : (
               <input
                 type="text"
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
+                value={form.groupName}
+                onChange={(e) => updateForm({ field: "groupName", value: e.target.value })}
                 placeholder="Nazwa grupy..."
                 className="h-9 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100 placeholder:text-zinc-500"
               />
@@ -188,13 +216,13 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
 
       {/* Result */}
       {result && !result.ok && (
-        <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" role="alert">
           {result.error}
         </div>
       )}
 
       {result?.ok && result.licenseKey && (
-        <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
+        <output className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
           <p className="text-xs text-emerald-300">
             Licencja utworzona ({result.plan?.toUpperCase()}, grupa: {result.groupName})
           </p>
@@ -213,9 +241,10 @@ export function CreateLicenseForm({ groups }: CreateLicenseFormProps) {
           <p className="mt-2 text-xs text-zinc-400">
             Przekaz ten klucz uzytkownikowi. Wkleja go w TIMEFLOW → Ustawienia → Online Sync → Licencja → Aktywuj.
           </p>
-        </div>
+        </output>
       )}
     </div>
+    </DashboardDrawer>
   );
 }
 

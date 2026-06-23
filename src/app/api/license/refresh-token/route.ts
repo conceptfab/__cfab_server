@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     },
     getBodyUserId: () => null,
     getDeviceId: (body) => body.deviceId,
-    execute: async ({ userId }) => {
+    execute: async () => {
       // Token refresh: with token-based auth the token is static (mapped in env).
       // This endpoint exists for future auth modes (JWT, session-based).
       // For now, it validates the current token is still valid.

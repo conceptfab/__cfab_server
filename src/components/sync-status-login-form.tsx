@@ -52,49 +52,47 @@ export function SyncStatusLoginForm({
   return (
     <>
       {invalid ? (
-        <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          Blad.
+        <div className="dashboard-auth-message dashboard-auth-message--error" role="alert">
+          Nieprawidłowy identyfikator lub token.
         </div>
       ) : null}
       {loggedOut ? (
-        <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2 text-sm text-zinc-200">
-          Sesja zakonczona.
-        </div>
+        <output className="dashboard-auth-message">
+          Sesja została zakończona.
+        </output>
       ) : null}
 
-      <form action="/auth/login" method="post" className="mt-4 space-y-3">
-        <label className="grid gap-1.5 text-sm">
-          <span className="sr-only">ID</span>
+      <form action="/auth/login" method="post" className="dashboard-auth-form">
+        <label>
+          <span>Identyfikator</span>
           <input
             type="text"
             name="i"
             required
             autoComplete="off"
             spellCheck={false}
-            aria-label="ID"
-            placeholder="ID"
-            className="h-10 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-500 focus:border-zinc-500"
+            aria-label="Identyfikator administratora"
+            placeholder="np. admin@example.com"
           />
         </label>
 
-        <label className="grid gap-1.5 text-sm">
-          <span className="sr-only">Kod</span>
-          <div className="flex items-center gap-2">
+        <label>
+          <span>Token</span>
+          <div className="dashboard-auth-token-row">
             <input
               type={showToken ? "text" : "password"}
               name="k"
               required
               autoComplete="off"
-              aria-label="Kod"
-              placeholder="Kod"
-              className="h-10 min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-500 focus:border-zinc-500"
+              aria-label="Token administratora"
+              placeholder="Wklej token"
             />
             <button
               type="button"
               onClick={() => setShowToken((prev) => !prev)}
-              aria-label={showToken ? "Ukryj" : "Pokaz"}
-              title={showToken ? "Ukryj" : "Pokaz"}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-zinc-700 bg-zinc-950 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100"
+              aria-label={showToken ? "Ukryj token" : "Pokaż token"}
+              title={showToken ? "Ukryj token" : "Pokaż token"}
+              className="dashboard-auth-token-toggle"
             >
               {showToken ? <EyeOffIcon /> : <EyeIcon />}
             </button>
@@ -103,9 +101,9 @@ export function SyncStatusLoginForm({
 
         <button
           type="submit"
-          className="inline-flex h-10 w-full items-center justify-center rounded-md border border-emerald-500/30 bg-emerald-500/15 px-4 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/20"
+          className="dashboard-auth-submit"
         >
-          Dalej
+          Zaloguj się
         </button>
       </form>
     </>

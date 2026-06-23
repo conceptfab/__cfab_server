@@ -10,7 +10,6 @@ import type {
   LicenseStatus,
   LicenseStoreFile,
   StorageBackendConfig,
-  StorageBackendType,
 } from "./license-contracts";
 import { PLAN_DEFAULTS } from "./license-contracts";
 import { generateLicenseKey } from "./license-keygen";
@@ -52,7 +51,7 @@ async function readStore(): Promise<LicenseStoreFile> {
       const store = parsed as LicenseStoreFile;
       // Backfill storageBackends for stores created before Phase 2
       if (!store.storageBackends) {
-        (store as any).storageBackends = {};
+        store.storageBackends = {};
       }
       // Backfill apiToken for devices registered before token generation
       for (const device of Object.values(store.devices)) {

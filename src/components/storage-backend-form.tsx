@@ -1,19 +1,57 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useReducer, useRef, useState } from "react";
+
+import { DashboardDrawer } from "@/components/dashboard/dashboard-drawer";
+
+type StorageKind = "sftp" | "ftp" | "aws-s3";
+
+interface CreateStorageFormState {
+  type: StorageKind;
+  name: string;
+  basePath: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+}
+
+type CreateStorageFormAction =
+  | {
+      [Key in keyof CreateStorageFormState]: {
+        field: Key;
+        value: CreateStorageFormState[Key];
+      };
+    }[keyof CreateStorageFormState]
+  | { reset: true };
+
+const INITIAL_CREATE_STORAGE_FORM: CreateStorageFormState = {
+  type: "ftp",
+  name: "",
+  basePath: "/timeflow-sync/",
+  host: "",
+  port: 21,
+  username: "",
+  password: "",
+};
+
+function createStorageFormReducer(
+  state: CreateStorageFormState,
+  action: CreateStorageFormAction,
+): CreateStorageFormState {
+  if ("reset" in action) return INITIAL_CREATE_STORAGE_FORM;
+  return { ...state, [action.field]: action.value };
+}
 
 // ---------------------------------------------------------------------------
 // CreateStorageBackendForm - formularz dodawania serwera SFTP/S3
 // ---------------------------------------------------------------------------
 
 export function CreateStorageBackendForm() {
-  const [type, setType] = useState<"sftp" | "ftp" | "aws-s3">("ftp");
-  const [name, setName] = useState("");
-  const [basePath, setBasePath] = useState("/timeflow-sync/");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState(21);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [form, updateForm] = useReducer(
+    createStorageFormReducer,
+    INITIAL_CREATE_STORAGE_FORM,
+  );
   const [creating, setCreating] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; error?: string; name?: string } | null>(null);
   const submittingRef = useRef(false);
@@ -26,12 +64,16 @@ export function CreateStorageBackendForm() {
     setResult(null);
 
     try {
-      const body: Record<string, unknown> = { type, name, basePath };
-      if (type === "sftp" || type === "ftp") {
-        body.host = host;
-        body.port = port;
-        body.username = username;
-        body.password = password;
+      const body: Record<string, unknown> = {
+        type: form.type,
+        name: form.name,
+        basePath: form.basePath,
+      };
+      if (form.type === "sftp" || form.type === "ftp") {
+        body.host = form.host;
+        body.port = form.port;
+        body.username = form.username;
+        body.password = form.password;
       }
 
       const res = await fetch("/api/admin/storage-backend", {
@@ -42,11 +84,8 @@ export function CreateStorageBackendForm() {
       const json = await res.json();
 
       if (json.ok) {
-        setResult({ ok: true, name });
-        setName("");
-        setHost("");
-        setUsername("");
-        setPassword("");
+        setResult({ ok: true, name: form.name });
+        updateForm({ reset: true });
         setTimeout(() => window.location.reload(), 1000);
       } else {
         setResult({ ok: false, error: json.error || "Nie udalo sie utworzyc backendu" });
@@ -60,7 +99,8 @@ export function CreateStorageBackendForm() {
   }
 
   return (
-    <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-800/50 p-4">
+    <DashboardDrawer title="Nowy backend storage" triggerLabel="Nowy backend">
+    <div className="dashboard-form">
       <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-400">
         Nowy storage backend
       </h3>
@@ -70,8 +110,8 @@ export function CreateStorageBackendForm() {
           <label className="grid gap-1 text-xs text-zinc-400">
             Typ
             <select
-              value={type}
-              onChange={(e) => setType(e.target.value as "sftp" | "ftp" | "aws-s3")}
+              value={form.type}
+              onChange={(e) => updateForm({ field: "type", value: e.target.value as StorageKind })}
               className="h-9 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
             >
               <option value="ftp">FTP</option>
@@ -84,8 +124,8 @@ export function CreateStorageBackendForm() {
             Nazwa
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={form.name}
+              onChange={(e) => updateForm({ field: "name", value: e.target.value })}
               placeholder="np. Serwer produkcyjny"
               required
               className="h-9 w-44 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100 placeholder:text-zinc-500"
@@ -96,22 +136,22 @@ export function CreateStorageBackendForm() {
             Base path
             <input
               type="text"
-              value={basePath}
-              onChange={(e) => setBasePath(e.target.value)}
+              value={form.basePath}
+              onChange={(e) => updateForm({ field: "basePath", value: e.target.value })}
               required
               className="h-9 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
             />
           </label>
         </div>
 
-        {(type === "sftp" || type === "ftp") && (
+        {(form.type === "sftp" || form.type === "ftp") && (
           <div className="flex flex-wrap items-end gap-3">
             <label className="grid gap-1 text-xs text-zinc-400">
               Host
               <input
                 type="text"
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
+                value={form.host}
+                onChange={(e) => updateForm({ field: "host", value: e.target.value })}
                 placeholder="ftp.example.com"
                 required
                 className="h-9 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100 placeholder:text-zinc-500"
@@ -122,8 +162,8 @@ export function CreateStorageBackendForm() {
               Port
               <input
                 type="number"
-                value={port}
-                onChange={(e) => setPort(Number(e.target.value) || (type === "ftp" ? 21 : 22))}
+                value={form.port}
+                onChange={(e) => updateForm({ field: "port", value: Number(e.target.value) || (form.type === "ftp" ? 21 : 22) })}
                 min={1}
                 max={65535}
                 className="h-9 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
@@ -134,8 +174,8 @@ export function CreateStorageBackendForm() {
               Uzytkownik
               <input
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={form.username}
+                onChange={(e) => updateForm({ field: "username", value: e.target.value })}
                 required
                 className="h-9 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
               />
@@ -145,8 +185,8 @@ export function CreateStorageBackendForm() {
               Haslo
               <input
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                value={form.password}
+                onChange={(e) => updateForm({ field: "password", value: e.target.value })}
                 required
                 className="h-9 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100"
               />
@@ -164,16 +204,17 @@ export function CreateStorageBackendForm() {
       </form>
 
       {result && !result.ok && (
-        <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" role="alert">
           {result.error}
         </div>
       )}
       {result?.ok && (
-        <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+        <output className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
           Backend &quot;{result.name}&quot; utworzony. Odswiezanie...
-        </div>
+        </output>
       )}
     </div>
+    </DashboardDrawer>
   );
 }
 
@@ -296,30 +337,71 @@ interface EditStorageBackendButtonProps {
   };
 }
 
+interface EditStorageFormState {
+  name: string;
+  basePath: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  maxFileSizeMb: number;
+  sessionTtlMinutes: number;
+}
+
+type EditStorageFormAction = {
+  [Key in keyof EditStorageFormState]: {
+    field: Key;
+    value: EditStorageFormState[Key];
+  };
+}[keyof EditStorageFormState];
+
+function editStorageFormReducer(
+  state: EditStorageFormState,
+  action: EditStorageFormAction,
+): EditStorageFormState {
+  return { ...state, [action.field]: action.value };
+}
+
+function createEditStorageFormState(
+  current: EditStorageBackendButtonProps["current"],
+): EditStorageFormState {
+  return {
+    name: current.name,
+    basePath: current.basePath,
+    host: current.host ?? "",
+    port: current.port ?? 21,
+    username: current.username ?? "",
+    password: "",
+    maxFileSizeMb: current.maxFileSizeMb,
+    sessionTtlMinutes: current.sessionTtlMinutes,
+  };
+}
+
 export function EditStorageBackendButton({ backendId, current }: EditStorageBackendButtonProps) {
-  const [open, setOpen] = useState(false);
+  const [form, updateForm] = useReducer(
+    editStorageFormReducer,
+    current,
+    createEditStorageFormState,
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState(current.name);
-  const [basePath, setBasePath] = useState(current.basePath);
-  const [host, setHost] = useState(current.host ?? "");
-  const [port, setPort] = useState(current.port ?? 21);
-  const [username, setUsername] = useState(current.username ?? "");
-  const [password, setPassword] = useState("");
-  const [maxFileSizeMb, setMaxFileSizeMb] = useState(current.maxFileSizeMb);
-  const [sessionTtlMinutes, setSessionTtlMinutes] = useState(current.sessionTtlMinutes);
 
   async function handleSave() {
     setSaving(true);
     setError(null);
 
     try {
-      const body: Record<string, unknown> = { name, basePath, maxFileSizeMb, sessionTtlMinutes };
+      const body: Record<string, unknown> = {
+        name: form.name,
+        basePath: form.basePath,
+        maxFileSizeMb: form.maxFileSizeMb,
+        sessionTtlMinutes: form.sessionTtlMinutes,
+      };
       if (current.type === "sftp" || current.type === "ftp") {
-        body.host = host;
-        body.port = port;
-        body.username = username;
-        if (password) body.password = password;
+        body.host = form.host;
+        body.port = form.port;
+        body.username = form.username;
+        if (form.password) body.password = form.password;
       }
 
       const res = await fetch(`/api/admin/storage-backend/${backendId}`, {
@@ -330,7 +412,6 @@ export function EditStorageBackendButton({ backendId, current }: EditStorageBack
       const json = await res.json();
 
       if (json.ok) {
-        setOpen(false);
         window.location.reload();
       } else {
         setError(json.error || "Nie udalo sie zapisac zmian");
@@ -342,41 +423,30 @@ export function EditStorageBackendButton({ backendId, current }: EditStorageBack
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-300 transition hover:bg-amber-500/20"
-      >
-        Edytuj
-      </button>
-    );
-  }
-
   const isFtpLike = current.type === "sftp" || current.type === "ftp";
 
   return (
-    <div className="mt-2 rounded-lg border border-zinc-600 bg-zinc-800/80 p-3 space-y-2">
+    <DashboardDrawer title="Edytuj backend storage" triggerLabel="Edytuj" tone="secondary">
+    <div className="dashboard-form space-y-2">
       <div className="flex flex-wrap items-end gap-3">
         <label className="grid gap-1 text-xs text-zinc-400">
           Nazwa
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+          <input type="text" value={form.name} onChange={(e) => updateForm({ field: "name", value: e.target.value })}
             className="h-8 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
         </label>
         <label className="grid gap-1 text-xs text-zinc-400">
           Base path
-          <input type="text" value={basePath} onChange={(e) => setBasePath(e.target.value)}
+          <input type="text" value={form.basePath} onChange={(e) => updateForm({ field: "basePath", value: e.target.value })}
             className="h-8 w-52 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
         </label>
         <label className="grid gap-1 text-xs text-zinc-400">
           Max plik (MB)
-          <input type="number" value={maxFileSizeMb} onChange={(e) => setMaxFileSizeMb(Number(e.target.value) || 100)}
+          <input type="number" value={form.maxFileSizeMb} onChange={(e) => updateForm({ field: "maxFileSizeMb", value: Number(e.target.value) || 100 })}
             min={1} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
         </label>
         <label className="grid gap-1 text-xs text-zinc-400">
           TTL sesji (min)
-          <input type="number" value={sessionTtlMinutes} onChange={(e) => setSessionTtlMinutes(Number(e.target.value) || 60)}
+          <input type="number" value={form.sessionTtlMinutes} onChange={(e) => updateForm({ field: "sessionTtlMinutes", value: Number(e.target.value) || 60 })}
             min={1} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
         </label>
       </div>
@@ -385,22 +455,22 @@ export function EditStorageBackendButton({ backendId, current }: EditStorageBack
         <div className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-xs text-zinc-400">
             Host
-            <input type="text" value={host} onChange={(e) => setHost(e.target.value)}
+            <input type="text" value={form.host} onChange={(e) => updateForm({ field: "host", value: e.target.value })}
               className="h-8 w-40 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
           </label>
           <label className="grid gap-1 text-xs text-zinc-400">
             Port
-            <input type="number" value={port} onChange={(e) => setPort(Number(e.target.value) || 21)}
+            <input type="number" value={form.port} onChange={(e) => updateForm({ field: "port", value: Number(e.target.value) || 21 })}
               min={1} max={65535} className="h-8 w-20 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
           </label>
           <label className="grid gap-1 text-xs text-zinc-400">
             Uzytkownik
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+            <input type="text" value={form.username} onChange={(e) => updateForm({ field: "username", value: e.target.value })}
               className="h-8 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100" />
           </label>
           <label className="grid gap-1 text-xs text-zinc-400">
             Haslo (puste = bez zmian)
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+            <input type="password" value={form.password} onChange={(e) => updateForm({ field: "password", value: e.target.value })}
               placeholder="••••••••"
               className="h-8 w-32 rounded-md border border-zinc-600 bg-zinc-900 px-2 text-sm text-zinc-100 placeholder:text-zinc-600" />
           </label>
@@ -412,13 +482,14 @@ export function EditStorageBackendButton({ backendId, current }: EditStorageBack
           className="h-8 rounded-md border border-emerald-500/30 bg-emerald-500/15 px-3 text-xs text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-50">
           {saving ? "Zapisywanie..." : "Zapisz"}
         </button>
-        <button type="button" onClick={() => setOpen(false)}
+        <button type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}
           className="h-8 rounded-md border border-zinc-600 px-3 text-xs text-zinc-300 hover:bg-zinc-700">
           Anuluj
         </button>
-        {error && <span className="text-xs text-rose-300">{error}</span>}
+        {error && <span className="text-xs text-rose-300" role="alert">{error}</span>}
       </div>
     </div>
+    </DashboardDrawer>
   );
 }
 
@@ -433,6 +504,14 @@ interface TestResult {
   matchOk: boolean;
   latencyMs: number;
   error: string | null;
+}
+
+function statusIcon(ok: boolean) {
+  return ok ? "✓" : "✗";
+}
+
+function statusColor(ok: boolean) {
+  return ok ? "text-emerald-300" : "text-rose-300";
 }
 
 export function TestStorageBackendButton({ backendId }: { backendId: string }) {
@@ -483,14 +562,6 @@ export function TestStorageBackendButton({ backendId }: { backendId: string }) {
     } finally {
       setTesting(false);
     }
-  }
-
-  function statusIcon(ok: boolean) {
-    return ok ? "✓" : "✗";
-  }
-
-  function statusColor(ok: boolean) {
-    return ok ? "text-emerald-300" : "text-rose-300";
   }
 
   return (

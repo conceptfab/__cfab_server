@@ -200,10 +200,10 @@ function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
       try {
         return await withSftp(async (sftp) => {
           const result = await sftp.get(remotePath);
-          return Buffer.isBuffer(result) ? result : Buffer.from(result as any);
+          return Buffer.isBuffer(result) ? result : Buffer.from(result as string);
         });
       } catch (error: unknown) {
-        if (typeof error === "object" && error !== null && "code" in error && (error as any).code === 2) {
+        if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === 2) {
           return null; // file not found
         }
         throw error;
@@ -225,7 +225,7 @@ function createS3Adapter(config: S3StorageBackend): StorageAdapter {
 
   // S3 doesn't have real directories — we use key prefixes.
   // basePath from StorageBackendBase (e.g. "sync/") is the prefix root.
-  const prefix = (config as any).basePath?.replace(/\/$/, "") ?? "sync";
+  const prefix = (config as { basePath?: string }).basePath?.replace(/\/$/, "") ?? "sync";
 
   function sessionPrefix(sessionId: string): string {
     return `${prefix}/${sessionId}/`;
@@ -376,7 +376,7 @@ function createS3Adapter(config: S3StorageBackend): StorageAdapter {
         }));
         return Buffer.from(await resp.Body!.transformToByteArray());
       } catch (error: unknown) {
-        if (typeof error === "object" && error !== null && "name" in error && (error as any).name === "NoSuchKey") {
+        if (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "NoSuchKey") {
           return null;
         }
         throw error;
@@ -560,7 +560,7 @@ export function createStorageAdapter(config: StorageBackendConfig): StorageAdapt
     case "aws-s3":
       return createS3Adapter(config);
     default:
-      throw new Error(`Unknown storage backend type: ${(config as any).type}`);
+      throw new Error(`Unknown storage backend type: ${(config as { type?: string }).type}`);
   }
 }
 

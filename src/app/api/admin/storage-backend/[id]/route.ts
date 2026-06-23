@@ -4,7 +4,6 @@ import { badRequest } from "@/lib/http/error";
 import type {
   AdminDeleteResponse,
   AdminStorageBackendResponse,
-  AdminStorageBackendTestResponse,
 } from "@/lib/sync/license-contracts";
 import {
   deleteStorageBackend,

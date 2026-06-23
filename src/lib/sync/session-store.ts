@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 import type { TableHashes } from "@/lib/sync/contracts";
 import type {
@@ -14,6 +16,11 @@ import type {
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const HEARTBEAT_SLIDE_MS = 2 * 60 * 1000; // 2 minutes
 const TERMINAL_STATES: SyncSessionStatus[] = ["completed", "failed", "expired", "cancelled"];
+
+/** Cast domain objects to Prisma's JSON input type without leaking `any`. */
+function asJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
 
 // ---------------------------------------------------------------------------
 // Phase mapping
@@ -35,7 +42,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-// biome-ignore lint: any needed for Prisma JSON fields
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma row JSON fields are loosely typed
 function dbToSession(row: any): SyncSession {
   return {
     id: row.id,
@@ -64,7 +71,7 @@ function dbToSession(row: any): SyncSession {
   };
 }
 
-// biome-ignore lint: any needed for Prisma JSON fields
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma row JSON fields are loosely typed
 function dbToHistory(row: any): SyncHistoryEntry {
   return {
     id: row.id,
@@ -82,7 +89,7 @@ function dbToHistory(row: any): SyncHistoryEntry {
   };
 }
 
-// biome-ignore lint: any needed for Prisma JSON fields
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma row JSON fields are loosely typed
 function dbToAsyncPackage(row: any): AsyncDeltaPackage {
   return {
     id: row.id,
@@ -121,7 +128,7 @@ export async function createSession(
       expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
       masterDeviceId: deviceId,
       masterMarkerHash: markerHash,
-      masterTableHashes: tableHashes as any,
+      masterTableHashes: asJson(tableHashes),
       currentStep: 0,
       stepLog: [],
     },
@@ -164,7 +171,7 @@ export async function joinSession(
     data: {
       slaveDeviceId,
       slaveMarkerHash,
-      slaveTableHashes: slaveTableHashes as any,
+      slaveTableHashes: asJson(slaveTableHashes),
       status: "negotiating",
       syncMode,
     },
@@ -212,11 +219,11 @@ export async function findAndJoinOrCreate(
         data: {
           slaveDeviceId: deviceId,
           slaveMarkerHash: markerHash,
-          slaveTableHashes: tableHashes as any,
+          slaveTableHashes: asJson(tableHashes),
           status: "negotiating",
           currentStep: 2,
           syncMode,
-          stepLog: stepLog as any,
+          stepLog: asJson(stepLog),
         },
       });
       return { session: dbToSession(row), role: "slave" as const };
@@ -232,9 +239,9 @@ export async function findAndJoinOrCreate(
         expiresAt: new Date(Date.now() + SESSION_TTL_MS),
         masterDeviceId: deviceId,
         masterMarkerHash: markerHash,
-        masterTableHashes: tableHashes as any,
+        masterTableHashes: asJson(tableHashes),
         currentStep: 1,
-        stepLog: [
+        stepLog: asJson([
           {
             step: 1,
             phase: "discovery",
@@ -244,7 +251,7 @@ export async function findAndJoinOrCreate(
             details: { markerHash },
             status: "ok",
           },
-        ] as any,
+        ]),
       },
     });
     return { session: dbToSession(row), role: "master" as const };
@@ -366,7 +373,7 @@ export async function reportStep(
     const row = await tx.syncSession.update({
       where: { id: sessionId },
       data: {
-        stepLog: stepLog as any,
+        stepLog: asJson(stepLog),
         currentStep: newStep,
         status: newStatus,
         errorMessage,
@@ -379,7 +386,6 @@ export async function reportStep(
 
 export async function heartbeat(
   sessionId: string,
-  _deviceId: string,
 ): Promise<SyncSession> {
   return prisma.$transaction(async (tx) => {
     const session = await tx.syncSession.findUniqueOrThrow({ where: { id: sessionId } });
@@ -481,9 +487,9 @@ export async function withValidatedSession(
         status: session.status,
         syncMode: session.syncMode,
         currentStep: session.currentStep,
-        stepLog: session.stepLog as any,
+        stepLog: asJson(session.stepLog),
         storageSessionPath: session.storageSessionPath,
-        storageCredentials: session.storageCredentials as any,
+        storageCredentials: asJson(session.storageCredentials),
         storageCredentialsSentAt: session.storageCredentialsSentAt ? new Date(session.storageCredentialsSentAt) : null,
         resultMarkerHash: session.resultMarkerHash,
         completedAt: session.completedAt ? new Date(session.completedAt) : null,
@@ -517,7 +523,7 @@ export async function updateSessionStorage(
     where: { id: sessionId },
     data: {
       storageSessionPath: storagePath,
-      storageCredentials: credentials as any,
+      storageCredentials: asJson(credentials),
       storageCredentialsSentAt: new Date(),
     },
   });

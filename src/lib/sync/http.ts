@@ -29,7 +29,6 @@ export async function validateTokenSyncAuth(request: Request): Promise<string | 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return null;
     }
-    const token = authHeader.substring(7);
     try {
         // reuse standard auth strategy without body requirements
         const auth = await authenticateSyncRequest(request, null);

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./dashboard.css";
 
 export const metadata: Metadata = {
-  title: "Panel",
-  description: "Panel",
+  title: "TimeFlow Sync Server",
+  description: "Panel administracyjny serwera synchronizacji TimeFlow",
 };
 
 export default function RootLayout({

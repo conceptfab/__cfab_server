@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TimeFlow Sync — Overview redesign</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070707;
+      --panel: #0b0b0b;
+      --panel-2: #0f0f0f;
+      --line: #272727;
+      --line-soft: #1b1b1b;
+      --text: #ededed;
+      --muted: #888;
+      --muted-2: #5f5f5f;
+      --danger: #ff6166;
+      --danger-bg: #200c0e;
+      --ok: #45d483;
+      --warn: #e7b65a;
+      --focus: #fff;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 228px minmax(0, 1fr); }
+    .sidebar {
+      position: sticky; top: 0; height: 100vh;
+      border-right: 1px solid var(--line-soft);
+      background: #080808;
+      display: flex; flex-direction: column;
+      padding: 18px 12px 12px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 20px; font-weight: 560; }
+    .mark { width: 18px; height: 18px; display: grid; place-items: center; }
+    .mark::before {
+      content: ""; width: 0; height: 0;
+      border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 15px solid #fff;
+    }
+    .workspace {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 0 4px 18px; padding: 9px 10px;
+      border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    }
+    .workspace strong { display: block; font-size: 13px; font-weight: 520; }
+    .workspace span { color: var(--muted); font-size: 11px; }
+    .chevron { color: var(--muted); }
+    .nav-label { color: var(--muted-2); font-size: 11px; padding: 0 10px 7px; }
+    nav { display: grid; gap: 2px; }
+    nav button {
+      border: 0; background: transparent; text-align: left;
+      min-height: 34px; border-radius: 6px; padding: 0 10px;
+      color: #a7a7a7; display: flex; align-items: center; gap: 9px; cursor: pointer;
+    }
+    nav button:hover { color: var(--text); background: #111; }
+    nav button.active { color: var(--text); background: #171717; }
+    .nav-icon { width: 15px; color: #777; font-family: ui-monospace, monospace; text-align: center; }
+    nav button.active .nav-icon { color: #fff; }
+    .nav-separator { height: 1px; background: var(--line-soft); margin: 14px 8px; }
+    .sidebar-foot { margin-top: auto; border-top: 1px solid var(--line-soft); padding: 12px 8px 0; }
+    .user { display: grid; grid-template-columns: 26px 1fr auto; gap: 9px; align-items: center; }
+    .avatar { width: 26px; height: 26px; border: 1px solid #333; border-radius: 50%; display: grid; place-items: center; font-size: 11px; }
+    .user strong { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+    .user small { color: var(--muted); font-size: 10px; }
+
+    .main { min-width: 0; }
+    .topbar {
+      height: 54px; border-bottom: 1px solid var(--line-soft);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 30px; background: rgba(7,7,7,.88); backdrop-filter: blur(10px);
+      position: sticky; top: 0; z-index: 5;
+    }
+    .crumbs { color: var(--muted); }
+    .crumbs b { color: var(--text); font-weight: 500; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .search {
+      width: 220px; height: 32px; border: 1px solid var(--line); border-radius: 6px;
+      background: #0c0c0c; color: var(--text); padding: 0 10px; outline: none;
+    }
+    .search:focus { border-color: #666; box-shadow: 0 0 0 1px #666; }
+    .kbd { border: 1px solid #333; border-bottom-color: #444; border-radius: 4px; color: #777; padding: 2px 5px; font: 10px ui-monospace, monospace; }
+
+    .content { max-width: 1220px; margin: 0 auto; padding: 34px 34px 52px; }
+    .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; }
+    h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 540; letter-spacing: -0.035em; }
+    .page-head p { margin: 7px 0 0; color: var(--muted); }
+    .button {
+      min-height: 34px; border-radius: 6px; border: 1px solid #3a3a3a; padding: 0 12px;
+      background: #ededed; color: #090909; font-weight: 520; cursor: pointer;
+    }
+    .button:hover { background: #fff; }
+
+    .status-grid {
+      display: grid; grid-template-columns: 1.35fr .9fr .9fr .9fr;
+      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 24px;
+    }
+    .status-cell { min-height: 112px; padding: 18px; background: var(--panel); border-right: 1px solid var(--line); }
+    .status-cell:last-child { border-right: 0; }
+    .cell-label { color: var(--muted); font-size: 12px; margin-bottom: 22px; }
+    .status-main { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 520; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); box-shadow: 0 0 0 4px #171717; }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 0 4px #102119; }
+    .dot.danger { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-bg); }
+    .status-meta { margin-top: 6px; color: var(--muted); font-size: 12px; }
+
+    .alert {
+      display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: center;
+      border: 1px solid #542126; background: #16090b; border-radius: 8px;
+      padding: 14px 16px; margin-bottom: 24px;
+    }
+    .alert-icon { color: var(--danger); font: 16px ui-monospace, monospace; }
+    .alert strong { display: block; font-weight: 520; }
+    .alert p { margin: 3px 0 0; color: #b78487; font-size: 12px; }
+    .link-button { background: transparent; border: 0; color: #f0b2b5; cursor: pointer; padding: 7px 0; }
+    .link-button:hover { color: #fff; text-decoration: underline; text-underline-offset: 4px; }
+
+    .work-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .8fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .pane { min-width: 0; background: var(--panel); }
+    .pane + .pane { border-left: 1px solid var(--line); }
+    .pane-head { min-height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+    .pane-head h2 { margin: 0; font-size: 14px; font-weight: 520; }
+    .pane-head span { color: var(--muted); font-size: 12px; }
+    .empty { min-height: 260px; display: grid; place-items: center; text-align: center; padding: 40px; }
+    .empty-glyph { width: 42px; height: 42px; margin: 0 auto 14px; border: 1px solid #303030; border-radius: 50%; display: grid; place-items: center; color: #777; font-family: ui-monospace, monospace; }
+    .empty strong { font-weight: 520; }
+    .empty p { max-width: 370px; margin: 7px auto 0; color: var(--muted); line-height: 1.5; }
+    .empty .text-action { display: inline-block; margin-top: 15px; color: var(--text); text-decoration: underline; text-underline-offset: 4px; }
+
+    .checklist { padding: 4px 16px 16px; }
+    .check-row { min-height: 59px; display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--line-soft); }
+    .check-row:last-child { border-bottom: 0; }
+    .check-symbol { width: 20px; height: 20px; border: 1px solid #353535; border-radius: 50%; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
+    .check-row.done .check-symbol { border-color: #24553a; background: #102119; color: var(--ok); }
+    .check-row strong { display: block; font-size: 12px; font-weight: 500; }
+    .check-row small { color: var(--muted); font-size: 11px; }
+    .arrow { color: #777; }
+
+    .resource-strip { margin-top: 24px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: grid; grid-template-columns: repeat(4, 1fr); }
+    .resource { padding: 15px 16px; background: var(--panel); border-right: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+    .resource:last-child { border-right: 0; }
+    .resource span { color: var(--muted); }
+    .resource b { font-size: 18px; font-weight: 520; font-variant-numeric: tabular-nums; }
+
+    .approval {
+      position: fixed; right: 22px; bottom: 20px; z-index: 20;
+      border: 1px solid #444; border-radius: 7px; background: #ededed; color: #090909;
+      padding: 10px 15px; font-weight: 560; cursor: pointer; box-shadow: 0 10px 35px rgba(0,0,0,.45);
+    }
+    .approval:hover { background: #fff; }
+    .approval.selected { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 68px minmax(0, 1fr); }
+      .brand span, .workspace, .nav-label, nav button span:not(.nav-icon), .sidebar-foot { display: none; }
+      nav button { justify-content: center; }
+      .status-grid { grid-template-columns: repeat(2, 1fr); }
+      .status-cell:nth-child(2) { border-right: 0; }
+      .status-cell:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .work-grid { grid-template-columns: 1fr; }
+      .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="mark"></span><span>TimeFlow Sync</span></div>
+      <div class="workspace"><div><strong>Production</strong><span>sync server</span></div><span class="chevron">⌄</span></div>
+      <div class="nav-label">Workspace</div>
+      <nav aria-label="Główna nawigacja">
+        <button class="active"><span class="nav-icon">⌂</span><span>Overview</span></button>
+        <button><span class="nav-icon">↕</span><span>Sync activity</span></button>
+        <button><span class="nav-icon">▣</span><span>Devices</span></button>
+        <div class="nav-separator"></div>
+        <button><span class="nav-icon">◇</span><span>Licenses</span></button>
+        <button><span class="nav-icon">◎</span><span>Groups</span></button>
+        <button><span class="nav-icon">▤</span><span>Storage</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="user"><span class="avatar">M</span><div><strong>michal@conceptfab.com</strong><small>Administrator</small></div><span class="chevron">⋯</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumbs">TimeFlow Sync <span> / </span> <b>Overview</b></div>
+        <div class="top-actions"><input class="search" aria-label="Szukaj" placeholder="Search resources…" /><span class="kbd">⌘ K</span></div>
+      </header>
+
+      <div class="content">
+        <div class="page-head">
+          <div><h1>Overview</h1><p>Stan serwera synchronizacji i najnowsza aktywność.</p></div>
+          <button class="button">Run health check</button>
+        </div>
+
+        <section class="status-grid" aria-label="Status systemu">
+          <div class="status-cell"><div class="cell-label">System status</div><div class="status-main"><span class="dot danger"></span>Degraded</div><div class="status-meta">1 component requires attention</div></div>
+          <div class="status-cell"><div class="cell-label">API server</div><div class="status-main"><span class="dot ok"></span>Online</div><div class="status-meta">localhost:3000</div></div>
+          <div class="status-cell"><div class="cell-label">Storage</div><div class="status-main"><span class="dot danger"></span>Offline</div><div class="status-meta">Last checked just now</div></div>
+          <div class="status-cell"><div class="cell-label">Uptime</div><div class="status-main">3m 12s</div><div class="status-meta">Started today</div></div>
+        </section>
+
+        <section class="alert">
+          <div class="alert-icon">!</div>
+          <div><strong>Storage backend is unavailable</strong><p>Synchronizacja nie może zapisywać nowych danych, dopóki połączenie nie zostanie przywrócone.</p></div>
+          <button class="link-button">Open storage settings →</button>
+        </section>
+
+        <section class="work-grid">
+          <div class="pane">
+            <div class="pane-head"><h2>Recent sync activity</h2><span>Last 24 hours</span></div>
+            <div class="empty"><div><div class="empty-glyph">↕</div><strong>No sync activity yet</strong><p>Operacje push, pull i delta pojawią się tutaj razem ze statusem, urządzeniem, rewizją i czasem wykonania.</p><span class="text-action">View API setup</span></div></div>
+          </div>
+          <aside class="pane">
+            <div class="pane-head"><h2>Setup</h2><span>1 of 4 complete</span></div>
+            <div class="checklist">
+              <div class="check-row done"><span class="check-symbol">✓</span><div><strong>API server</strong><small>Running locally</small></div><span class="arrow">→</span></div>
+              <div class="check-row"><span class="check-symbol">2</span><div><strong>Configure storage</strong><small>Add SFTP or S3 backend</small></div><span class="arrow">→</span></div>
+              <div class="check-row"><span class="check-symbol">3</span><div><strong>Create a license</strong><small>Assign device limits</small></div><span class="arrow">→</span></div>
+              <div class="check-row"><span class="check-symbol">4</span><div><strong>Connect a device</strong><small>Run the first sync</small></div><span class="arrow">→</span></div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="resource-strip" aria-label="Zasoby">
+          <div class="resource"><span>Devices</span><b>0</b></div>
+          <div class="resource"><span>Licenses</span><b>0</b></div>
+          <div class="resource"><span>Groups</span><b>0</b></div>
+          <div class="resource"><span>Storage backends</span><b>0</b></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <button class="approval" data-choice="overview-console-v1" onclick="toggleSelect(this)">Akceptuję układ Overview</button>
+</body>
+</html>

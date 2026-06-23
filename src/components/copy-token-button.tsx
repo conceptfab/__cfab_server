@@ -1,14 +1,31 @@
 "use client";
 
+import { useState } from "react";
+
 export function CopyTokenButton({ token }: { token: string }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
+      setCopyState("error");
+    }
+  }
+
   return (
     <button
       type="button"
-      className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
-      title="Kliknij aby skopiowac token"
-      onClick={() => { navigator.clipboard.writeText(token); }}
+      aria-label={`Skopiuj token ${token.slice(0, 8)}`}
+      className="dashboard-copy-token"
+      title="Skopiuj token"
+      onClick={copyToken}
     >
-      {token.slice(0, 8)}&hellip;
+      {copyState === "idle" ? `${token.slice(0, 8)}…` : null}
+      {copyState === "copied" ? <output>Skopiowano</output> : null}
+      {copyState === "error" ? <span role="alert">Błąd kopiowania</span> : null}
     </button>
   );
 }

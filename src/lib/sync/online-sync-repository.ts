@@ -9,7 +9,6 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { TableHashes } from "./contracts";
-import { log } from "@/lib/observability/logger";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -52,7 +51,7 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
     const raw = await readFile(filePath, "utf8");
     return JSON.parse(raw) as T;
   } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "ENOENT") {
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
       return null;
     }
     throw error;
@@ -102,7 +101,7 @@ export async function getAllOnlineSyncUsers(): Promise<OnlineSyncUserSummary[]> 
 
     return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "ENOENT") {
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
       return [];
     }
     throw error;

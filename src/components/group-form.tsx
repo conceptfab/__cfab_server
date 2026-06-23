@@ -2,13 +2,14 @@
 
 import { useState, useTransition } from "react";
 
+import { DashboardDrawer } from "@/components/dashboard/dashboard-drawer";
+
 interface CreateGroupFormProps {
   licenses: { id: string; licenseKey: string; plan: string }[];
   storageBackends: { id: string; name: string; type: string }[];
 }
 
 export function CreateGroupForm({ licenses, storageBackends }: CreateGroupFormProps) {
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +35,6 @@ export function CreateGroupForm({ licenses, storageBackends }: CreateGroupFormPr
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `HTTP ${res.status}`);
         }
-        setOpen(false);
         window.location.reload();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -42,22 +42,11 @@ export function CreateGroupForm({ licenses, storageBackends }: CreateGroupFormPr
     });
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700 transition-colors"
-      >
-        + Nowa grupa
-      </button>
-    );
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="mt-3 rounded-lg border border-zinc-700 bg-zinc-800/50 p-4 space-y-3">
+    <DashboardDrawer title="Nowa grupa" triggerLabel="Nowa grupa">
+    <form onSubmit={handleSubmit} className="dashboard-form space-y-3">
       {error && (
-        <p className="text-xs text-red-400 border border-red-500/30 bg-red-500/10 rounded px-2 py-1">{error}</p>
+        <p className="text-xs text-red-400 border border-red-500/30 bg-red-500/10 rounded px-2 py-1" role="alert">{error}</p>
       )}
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
@@ -102,11 +91,12 @@ export function CreateGroupForm({ licenses, storageBackends }: CreateGroupFormPr
           className="rounded-lg bg-sky-600 px-4 py-1.5 text-xs text-white hover:bg-sky-500 disabled:opacity-50 transition-colors">
           {pending ? "Tworzenie..." : "Utworz grupe"}
         </button>
-        <button type="button" onClick={() => setOpen(false)}
+        <button type="button" onClick={(event) => event.currentTarget.closest("dialog")?.close()}
           className="rounded-lg border border-zinc-600 px-4 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors">
           Anuluj
         </button>
       </div>
     </form>
+    </DashboardDrawer>
   );
 }

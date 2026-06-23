@@ -603,7 +603,7 @@ async function handleDeltaPushInner(
   }
 
   // Load existing snapshot or start fresh
-  let snapshot =
+  const snapshot =
     (await readSnapshot<SnapshotArchive>(path.join(dir, "snapshot.json"))) ?? {
       version: "1",
       data: {

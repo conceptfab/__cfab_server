@@ -101,8 +101,8 @@ export async function POST(request: Request) {
       { headers },
     );
   } catch (error) {
-    const status = (error as any)?.status ?? 500;
-    const code = (error as any)?.code ?? "internal_error";
+    const status = (error as { status?: number }).status ?? 500;
+    const code = (error as { code?: string }).code ?? "internal_error";
     const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json(
       { ok: false, code, error: message, requestId },
