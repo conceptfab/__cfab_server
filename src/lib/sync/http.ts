@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { authenticateSyncRequest } from "@/lib/auth/server-auth";
 import { getEnv } from "@/lib/config/env";
-import { internalServerError, isAppError, tooManyRequests } from "@/lib/http/error";
+import { internalServerError, isAppError, serviceUnavailable, tooManyRequests, type AppError } from "@/lib/http/error";
 import { getClientIp, parseJsonBody } from "@/lib/http/request";
 import { log, logError } from "@/lib/observability/logger";
 import { REQUEST_ID_HEADER, getOrCreateRequestId } from "@/lib/observability/request-id";
@@ -89,9 +89,31 @@ function buildHeaders(requestId: string, request?: Request): HeadersInit {
   };
 }
 
+/**
+ * Map low-level infrastructure errors (DB unreachable / schema not migrated) to a
+ * clear 503 instead of an opaque 500 `internal_error`. Without this, a missing
+ * `sync_sessions` table (Prisma P2021) or unreachable Postgres (P1xxx / init error)
+ * surfaces as a generic 500 with no usable signal in the client logs.
+ */
+function mapInfraError(error: unknown): AppError | null {
+  if (!(error instanceof Error)) return null;
+  const codeRaw = (error as { code?: unknown }).code;
+  const code = typeof codeRaw === "string" ? codeRaw : "";
+  const isInit = error.name === "PrismaClientInitializationError";
+  const isSchemaOrConn = code.startsWith("P1") || code === "P2021" || code === "P2022";
+  if (isInit || isSchemaOrConn) {
+    return serviceUnavailable(
+      "Sync database unavailable or schema not initialized (run `prisma migrate deploy`)",
+      "database_unavailable",
+      code ? { prismaCode: code } : undefined,
+    );
+  }
+  return null;
+}
+
 function responseFromError(error: unknown, requestId: string, request: Request): NextResponse {
   const env = getEnv();
-  const appError = isAppError(error) ? error : internalServerError();
+  const appError = isAppError(error) ? error : (mapInfraError(error) ?? internalServerError());
 
   if (!isAppError(error)) {
     logError("sync.request.unhandled_error", error, { requestId });

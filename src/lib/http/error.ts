@@ -65,6 +65,14 @@ export function tooManyRequests(
   return new AppError({ status: 429, code, message, details });
 }
 
+export function serviceUnavailable(
+  message = "Service temporarily unavailable",
+  code = "service_unavailable",
+  details?: Record<string, unknown>,
+): AppError {
+  return new AppError({ status: 503, code, message, details });
+}
+
 export function internalServerError(): AppError {
   return new AppError({
     status: 500,
