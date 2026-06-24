@@ -1,3 +1,5 @@
+import { log } from "@/lib/observability/logger";
+
 type AuthMode = "token" | "session";
 type EncryptionMode = "none" | "server" | "e2e";
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -147,10 +149,10 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
       120,
       "SYNC_RATE_LIMIT_MAX_REQUESTS",
     ),
-    syncAllowInsecureDevUserIdFallback: parseBoolEnv(
-      env.SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK,
-      nodeEnv !== "production",
-    ),
+    // Bezpieczeństwo: w produkcji ten fallback NIGDY nie jest aktywny, niezależnie od flagi.
+    syncAllowInsecureDevUserIdFallback: isProduction
+      ? false
+      : parseBoolEnv(env.SYNC_ALLOW_INSECURE_DEV_USERID_FALLBACK, true),
 
     syncMaxArrayItems: parseIntEnv(
       env.SYNC_MAX_ARRAY_ITEMS,
@@ -177,6 +179,14 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
     adminApiToken: env.ADMIN_API_TOKEN?.trim() || null,
   };
+
+  if (
+    isProduction &&
+    config.syncAllowedOrigins.length === 1 &&
+    config.syncAllowedOrigins[0] === "*"
+  ) {
+    log("warn", "cors.wildcard_in_prod", {});
+  }
 
   if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
     throw new Error("SYNC_ENCRYPTION_KEY must be at least 32 characters");
