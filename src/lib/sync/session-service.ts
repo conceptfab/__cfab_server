@@ -23,7 +23,8 @@ import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
 import type { StorageAdapter } from "./sftp-manager";
 import { encryptCredentialsWithFileKey } from "./storage-encryption";
 import { getEnv } from "@/lib/config/env";
-import { getStorageBackend, getAllGroups, getAllLicenses } from "./license-store";
+import { getStorageBackend, getAllGroups, getAllLicenses, touchDeviceLastSeen, getDevice, getDevicesForLicense, getDevicesForUser } from "./license-store";
+import { isPeerPresent } from "@/lib/sync/peer-presence";
 import type { ClientGroup, DeviceRegistration, License } from "./license-contracts";
 import { validateLicenseForSync } from "./license-middleware";
 import { log } from "@/lib/observability/logger";
@@ -128,13 +129,40 @@ export async function handleSessionCreate(
     validateLicenseForSync(license, group, deviceReg, body.deviceId);
   }
 
+  // Peer-presence gate: register this device as seen, then check whether any
+  // OTHER device in the license group is online (last 5 min). Mirrors the
+  // presence pattern in direct-sync.ts. Prevents a solo device from parking a
+  // master session that waits the full TTL for a peer that will never join.
+  await touchDeviceLastSeen(body.deviceId).catch(() => {});
+  const requestingDevice = await getDevice(body.deviceId);
+  const peerDevices = requestingDevice
+    ? await getDevicesForLicense(requestingDevice.licenseId)
+    : await getDevicesForUser(userId);
+  const peerPresent = isPeerPresent(peerDevices, body.deviceId, Date.now());
+
   // C1: Atomic find-and-join-or-create to prevent race condition in session pairing
-  const { session, role } = await findAndJoinOrCreate(
+  const result = await findAndJoinOrCreate(
     userId,
     body.deviceId,
     body.markerHash,
     body.tableHashes,
+    peerPresent,
   );
+
+  if (result.role === "no_peer") {
+    log("info", "session-service.no-peer", { deviceId: body.deviceId });
+    return {
+      ok: true,
+      sessionId: "",
+      role: "master",
+      status: "no_peer",
+      peerDeviceId: null,
+      peerMarkerHash: null,
+      syncMode: null,
+    };
+  }
+
+  const { session, role } = result;
 
   // Force full sync override (requested by client via tray menu)
   if (body.forceFullSync && session.syncMode) {
