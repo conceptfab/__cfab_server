@@ -601,12 +601,18 @@ export async function getPendingPackagesForGroup(
   groupId: string,
   excludeDeviceId: string,
 ): Promise<AsyncDeltaPackage[]> {
+  const delivered = await prisma.asyncDeltaDelivery.findMany({
+    where: { deviceId: excludeDeviceId },
+    select: { packageId: true },
+  });
+  const deliveredIds = delivered.map((d) => d.packageId);
   const rows = await prisma.asyncDeltaPackage.findMany({
     where: {
       groupId,
       status: "pending",
       fromDeviceId: { not: excludeDeviceId },
       expiresAt: { gt: new Date() },
+      id: { notIn: deliveredIds.length > 0 ? deliveredIds : ["__none__"] },
     },
   });
   return rows.map(dbToAsyncPackage);
@@ -664,6 +670,34 @@ export async function getCleanableAsyncPackageIds(): Promise<{ id: string; stora
     select: { id: true, storagePath: true },
   });
   return rows;
+}
+
+/** Zapisz potwierdzenie odbioru paczki przez konkretne urządzenie (idempotentnie). */
+export async function recordAsyncDelivery(packageId: string, deviceId: string): Promise<void> {
+  await prisma.asyncDeltaDelivery.upsert({
+    where: { packageId_deviceId: { packageId, deviceId } },
+    create: { packageId, deviceId },
+    update: {},
+  });
+}
+
+/** Lista deviceId, które potwierdziły odbiór danej paczki. */
+export async function getAckedDeviceIds(packageId: string): Promise<string[]> {
+  const rows = await prisma.asyncDeltaDelivery.findMany({
+    where: { packageId },
+    select: { deviceId: true },
+  });
+  return rows.map((r) => r.deviceId);
+}
+
+/** Aktywne urządzenia grupy (lastSeenAt w ostatnich 30 dniach). */
+export async function getActiveDeviceIdsForGroup(groupId: string): Promise<string[]> {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await prisma.licenseDevice.findMany({
+    where: { groupId, lastSeenAt: { gte: cutoff } },
+    select: { deviceId: true },
+  });
+  return rows.map((r) => r.deviceId);
 }
 
 // ---------------------------------------------------------------------------

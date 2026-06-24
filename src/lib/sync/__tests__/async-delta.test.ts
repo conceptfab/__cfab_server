@@ -76,4 +76,11 @@ describe("async-delta pending filter", () => {
     const res = await handleAsyncPending("owner1", "devB", "G1");
     expect(res.packages.map((p: any) => p.id)).toEqual(["p1"]);
   });
+
+  it("excludes packages already delivered to THIS device", async () => {
+    state.packages.push(pkg("p1", "devA"));
+    state.deliveries.push({ packageId: "p1", deviceId: "devB" });
+    const res = await handleAsyncPending("owner1", "devB", "G1");
+    expect(res.packages.map((p: any) => p.id)).toEqual([]);
+  });
 });
