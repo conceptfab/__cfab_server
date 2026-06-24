@@ -211,7 +211,13 @@ export async function handleSessionCreate(
             downloadPath: connInfo.downloadPath,
           };
 
-          const encrypted = encryptCredentialsWithFileKey(connection, session.id);
+          // Legacy ścieżka sesyjna: zostaje przy globalnym SYNC_ENCRYPTION_KEY
+          // (gwarantowany przez guard powyżej). Async-delta (demon) używa klucza grupy.
+          const encrypted = encryptCredentialsWithFileKey(
+            connection,
+            session.id,
+            env.syncEncryptionKey,
+          );
 
           await updateSessionStorage(session.id, sessionPath, {
             encrypted,

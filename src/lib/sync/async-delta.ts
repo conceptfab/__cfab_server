@@ -19,7 +19,7 @@ import {
 import { getStorageBackend, getAllGroups } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
 import type { StorageAdapter } from "./sftp-manager";
-import { encryptCredentialsWithFileKey } from "./storage-encryption";
+import { encryptCredentialsWithFileKey, deriveGroupKey } from "./storage-encryption";
 import { log } from "@/lib/observability/logger";
 
 const ASYNC_PACKAGE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
@@ -93,13 +93,15 @@ export async function handleAsyncPush(
       {
         host: connInfo.host,
         port: connInfo.port,
-        protocol: connInfo.protocol as "sftp",
+        protocol: connInfo.protocol as "sftp" | "ftp",
         username: connInfo.username,
         password: connInfo.password,
         uploadPath: connInfo.uploadPath,
         downloadPath: connInfo.downloadPath,
+        secure: connInfo.secure,
       },
       packageId,
+      deriveGroupKey(groupId),
     );
     storageCredentials = { encrypted };
   } catch {
@@ -299,13 +301,15 @@ export async function handleAsyncCredentials(
       {
         host: connInfo.host,
         port: connInfo.port,
-        protocol: connInfo.protocol as "sftp",
+        protocol: connInfo.protocol as "sftp" | "ftp",
         username: connInfo.username,
         password: connInfo.password,
         uploadPath: connInfo.uploadPath,
         downloadPath: connInfo.downloadPath,
+        secure: connInfo.secure,
       },
       packageId,
+      deriveGroupKey(pkg.groupId),
     );
     storageCredentials = { encrypted };
   } catch {

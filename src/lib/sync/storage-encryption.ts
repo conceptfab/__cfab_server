@@ -3,6 +3,7 @@ import {
   createDecipheriv,
   randomBytes,
   createHmac,
+  createHash,
 } from "node:crypto";
 import { getEnv } from "@/lib/config/env";
 
@@ -11,11 +12,12 @@ import { getEnv } from "@/lib/config/env";
 export interface SftpCredentialsPayload {
   host: string;
   port: number;
-  protocol: "sftp";
+  protocol: "sftp" | "ftp";
   username: string;
   password: string;
   uploadPath: string;
   downloadPath: string;
+  secure?: boolean; // FTP: czy FTPS (AUTH TLS). SFTP: undefined.
   fileEncryptionKey: string; // base64 key for encrypting files on storage
 }
 
@@ -38,19 +40,33 @@ function deriveSessionKey(
   return okm; // 32 bytes = AES-256 key
 }
 
+/**
+ * Klucz grupy — IDENTYCZNY z klientem (`deriveGroupEncryptionKey` w demonie):
+ * `hex(SHA-256("timeflow-online-sync-e2e-v1|" + groupId.trim()))`.
+ *
+ * Creds FTP są szyfrowane TYM kluczem (a nie globalnym SYNC_ENCRYPTION_KEY), więc
+ * klient odszyfrowuje je swoim auto-wyprowadzanym kluczem grupy — bez żadnego
+ * ręcznego sekretu wklejanego przez użytkownika.
+ */
+export function deriveGroupKey(groupId: string): string {
+  return createHash("sha256")
+    .update(`timeflow-online-sync-e2e-v1|${groupId.trim()}`)
+    .digest("hex");
+}
+
 // --- Encrypt/Decrypt ---
 
 export function encryptCredentials(
   payload: SftpCredentialsPayload,
   sessionId: string,
+  masterKey: string,
 ): EncryptedCredentials {
-  const env = getEnv();
-  if (!env.syncEncryptionKey) {
-    throw new Error("SYNC_ENCRYPTION_KEY not configured");
+  if (!masterKey) {
+    throw new Error("credential master key not provided");
   }
 
   const key = deriveSessionKey(
-    env.syncEncryptionKey,
+    masterKey,
     sessionId,
     "credential-encryption",
   );
@@ -103,14 +119,9 @@ export function decryptCredentials(
 
 // --- File encryption key derivation (internal) ---
 
-function deriveFileEncryptionKey(sessionId: string): string {
-  const env = getEnv();
-  if (!env.syncEncryptionKey) {
-    throw new Error("SYNC_ENCRYPTION_KEY not configured");
-  }
-
+function deriveFileEncryptionKey(sessionId: string, masterKey: string): string {
   const key = deriveSessionKey(
-    env.syncEncryptionKey,
+    masterKey,
     sessionId,
     "file-encryption",
   );
@@ -124,8 +135,9 @@ export type SftpConnectionInfo = Omit<SftpCredentialsPayload, "fileEncryptionKey
 export function encryptCredentialsWithFileKey(
   connection: SftpConnectionInfo,
   sessionId: string,
+  masterKey: string,
 ): EncryptedCredentials {
-  const fileEncryptionKey = deriveFileEncryptionKey(sessionId);
+  const fileEncryptionKey = deriveFileEncryptionKey(sessionId, masterKey);
   const payload: SftpCredentialsPayload = { ...connection, fileEncryptionKey };
-  return encryptCredentials(payload, sessionId);
+  return encryptCredentials(payload, sessionId, masterKey);
 }
