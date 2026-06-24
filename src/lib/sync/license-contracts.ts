@@ -150,6 +150,7 @@ export interface AdminCreateGroupBody {
 
 export interface AdminUpdateGroupBody {
   name?: string;
+  ownerId?: string;
   storageBackendId?: string;
   fixedMasterDeviceId?: string | null;
   maxSyncFrequencyHours?: number | null;

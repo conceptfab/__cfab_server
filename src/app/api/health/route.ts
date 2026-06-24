@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       time: now,
       authMode: env.syncAuthMode,
       encryptionMode: env.encryptionMode,
-      storageMode: "file",
+      storageMode: "postgres",
       databaseConfigured: Boolean(env.databaseUrl),
     },
     {

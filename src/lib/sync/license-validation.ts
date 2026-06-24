@@ -114,6 +114,7 @@ export function validateUpdateGroupBody(body: unknown): AdminUpdateGroupBody {
   assertObject(body);
   return {
     name: optionalString(body.name),
+    ownerId: optionalString(body.ownerId),
     storageBackendId: optionalString(body.storageBackendId),
     fixedMasterDeviceId: body.fixedMasterDeviceId === null ? null : optionalString(body.fixedMasterDeviceId),
     maxSyncFrequencyHours: optionalNullableNumber(body.maxSyncFrequencyHours, "maxSyncFrequencyHours"),

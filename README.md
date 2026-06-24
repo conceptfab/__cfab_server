@@ -8,8 +8,8 @@ Serwer sync dla dashboardu/klienta TimeFlow. Aktualny etap:
 - rate limiting (in-memory, best-effort),
 - JSON logs + `x-request-id`,
 - healthcheck `GET /api/health`,
-- file storage (MVP) zaabstrahowany pod przyszłą migrację do DB,
-- scaffold `prisma/schema.prisma` pod Postgres.
+- cały stan trwały w Postgres (Prisma) — bez zależności od dysku,
+- deploy serverless na Vercel (Neon Postgres + Vercel Cron).
 
 ## Szybki start (local)
 
@@ -64,21 +64,29 @@ Endpointy `/api/sync/*` obsługują CORS + preflight `OPTIONS`.
 
 API sync zwraca `x-request-id` i używa `Cache-Control: no-store`.
 
-## Storage (aktualnie)
+## Storage (Postgres)
 
-Stan sync jest zapisywany w `data/sync-store.json` (plik lokalny) z mutexem procesowym, co poprawia zachowanie przy równoległych requestach w ramach jednej instancji.
+Cały stan trwały żyje w Postgres (Prisma): licencje/grupy/urządzenia/storage-backendy, online-sync
+(`sync_heads`, `sync_snapshots`), sesje sync, historia i feedback. Brak zależności od lokalnego dysku —
+aplikacja działa poprawnie na serverless (Vercel). `SYNC_DATA_DIR` nie jest już używany.
 
-Można nadpisać katalog storage przez `SYNC_DATA_DIR` (np. na Railway ustaw `SYNC_DATA_DIR=/data`, jeśli volume jest zamontowany pod `/data`).
+## Deploy na Vercel
 
-To jest etap przejściowy przed migracją na Postgresa/Prisma.
+1. **Postgres (Neon):** w Vercel → Storage podłącz integrację Neon. Ustawi `DATABASE_URL` (pooled).
+   Dodatkowo ustaw `DIRECT_URL` = wartość `*-UNPOOLED` (potrzebne dla `prisma migrate`).
+2. **Zmienne środowiskowe:** ustaw w Vercel zmienne z `.env.example` (m.in. `SYNC_API_TOKENS`,
+   `ADMIN_API_TOKEN`, `CRON_SECRET`, a przy SFTP — `SYNC_ENCRYPTION_KEY` ≥ 32 znaki).
+3. **Build:** `npm run build` uruchamia `prisma generate && prisma migrate deploy && next build`
+   (migracje aplikują się przy deployu, na `DIRECT_URL`).
+4. **Cron:** `vercel.json` definiuje cron `*/10 * * * *` → `GET /api/cron/session-cleanup`
+   (czyści wygasłe sesje; auth przez `CRON_SECRET`).
 
-## Prisma / Postgres (scaffold)
+```bash
+# lokalnie, po ustawieniu DATABASE_URL + DIRECT_URL
+npm install
+npx prisma migrate deploy
+npm run dev
+```
 
-Dodany został `prisma/schema.prisma` zgodny z `server_plan.md` (tabele `users`, `devices`, `sync_heads`, `sync_snapshots`, `sync_events`), ale runtime nadal korzysta z file storage.
-
-Kolejny krok:
-
-1. dodać `prisma` + `@prisma/client`,
-2. wygenerować migrację,
-3. podmienić `FileSyncRepository` na implementację DB.
+Migracje schematu: `npx prisma migrate dev --name <opis>` (tworzy migrację z `prisma/schema.prisma`).
 
