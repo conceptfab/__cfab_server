@@ -18,6 +18,7 @@ type SyncRouteName =
   | "async-pending"
   | "async-ack"
   | "async-reject"
+  | "async-sent-cleanup"
   | "direct-status"
   | "direct-push"
   | "direct-delta-pull"

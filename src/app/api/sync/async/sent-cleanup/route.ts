@@ -16,7 +16,7 @@ export async function OPTIONS(request: Request) {
 
 export async function POST(request: Request) {
   return handleSyncPost<SentCleanupBody, AsyncSentCleanupResponse>(request, {
-    route: "async-pending",
+    route: "async-sent-cleanup",
     parseBody: (raw: unknown) => {
       const body = raw as Record<string, unknown>;
       if (!body || typeof body.deviceId !== "string" || !body.deviceId.trim()) {
