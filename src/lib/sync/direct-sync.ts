@@ -399,6 +399,34 @@ async function handlePushInner(
   const existingMeta = await readJson<UserMeta>(path.join(dir, "meta.json"));
   const currentRevision = existingMeta?.revision ?? 0;
 
+  // CAS: reject a push built on a stale revision so concurrent pushes can't
+  // silently overwrite each other. knownServerRevision === null means bootstrap
+  // (client has no server state / no meta.json yet) — let it through.
+  // NB: strict `!==` (not `<` like delta-push's stale_base_revision check): for a
+  // full-snapshot push a client claiming a revision the server never issued is
+  // incoherent too, so a "client ahead of head" push is also rejected. Don't
+  // "fix" this to match delta-push.
+  if (
+    body.knownServerRevision !== null &&
+    body.knownServerRevision !== currentRevision
+  ) {
+    log("warn", "direct-sync.push.stale-revision", {
+      userId,
+      deviceId: body.deviceId,
+      knownServerRevision: body.knownServerRevision,
+      currentRevision,
+    });
+    return {
+      ok: true,
+      accepted: false,
+      noOp: false,
+      revision: currentRevision,
+      payloadSha256: existingMeta?.payloadSha256 ?? "",
+      receivedAt: now,
+      reason: "stale_revision",
+    };
+  }
+
   // If archive identical, no-op
   if (existingMeta && existingMeta.payloadSha256 === hash) {
     return {
