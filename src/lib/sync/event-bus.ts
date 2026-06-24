@@ -1,5 +1,7 @@
 // SSE Event Bus — notifies connected clients when new sync data is available.
-// In-memory only (single-process); sufficient for Railway single-instance deploy.
+// In-memory only (single-process): on Vercel serverless this does NOT broadcast
+// across function instances, so clients rely on polling /api/sync/status. Kept as
+// a single-instance fast-path; `notifyPeers` is currently unused.
 
 export interface SyncEvent {
   type: "sync_available";

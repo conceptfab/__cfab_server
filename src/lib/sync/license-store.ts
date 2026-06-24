@@ -1,106 +1,103 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
 
+import { Prisma } from "@prisma/client";
+import type {
+  License as PrismaLicense,
+  Group as PrismaGroup,
+  LicenseDevice as PrismaLicenseDevice,
+  StorageBackend as PrismaStorageBackend,
+} from "@prisma/client";
+
+import { prisma } from "@/lib/db";
 import type {
   ClientGroup,
   DeviceRegistration,
   License,
   LicensePlan,
   LicenseStatus,
-  LicenseStoreFile,
   StorageBackendConfig,
+  StorageBackendType,
 } from "./license-contracts";
 import { PLAN_DEFAULTS } from "./license-contracts";
 import { generateLicenseKey } from "./license-keygen";
+
+// ---------------------------------------------------------------------------
+// State store backed by Postgres (Prisma). All entities previously lived in
+// data/license-store.json; cross-references (groupId/licenseId/storageBackendId)
+// remain loose string IDs with integrity enforced here, as before.
+// ---------------------------------------------------------------------------
 
 function generateApiToken(): string {
   return randomBytes(32).toString("hex");
 }
 
-const DATA_DIR =
-  process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
-const STORE_FILE = path.join(DATA_DIR, "license-store.json");
-
 // ---------------------------------------------------------------------------
-// File I/O
+// Domain ↔ Prisma mappers
 // ---------------------------------------------------------------------------
 
-function nowIso(): string {
-  return new Date().toISOString();
+function mapLicense(row: PrismaLicense, activeDevices: string[]): License {
+  return {
+    id: row.id,
+    licenseKey: row.licenseKey,
+    groupId: row.groupId,
+    plan: row.plan as LicensePlan,
+    status: row.status as LicenseStatus,
+    createdAt: row.createdAt.toISOString(),
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    maxDevices: row.maxDevices,
+    activeDevices,
+  };
 }
 
-function emptyStore(): LicenseStoreFile {
-  return { version: 1, licenses: {}, groups: {}, devices: {}, storageBackends: {} };
+function mapGroup(row: PrismaGroup): ClientGroup {
+  return {
+    id: row.id,
+    name: row.name,
+    ownerId: row.ownerId,
+    licenseId: row.licenseId,
+    storageBackendId: row.storageBackendId,
+    fixedMasterDeviceId: row.fixedMasterDeviceId ?? null,
+    syncPriority: (row.syncPriority as Record<string, number>) ?? {},
+    maxSyncFrequencyHours: row.maxSyncFrequencyHours ?? null,
+    maxDatabaseSizeMb: row.maxDatabaseSizeMb ?? null,
+  };
 }
 
-async function ensureDataDir(): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
+function mapDevice(row: PrismaLicenseDevice): DeviceRegistration {
+  return {
+    deviceId: row.deviceId,
+    groupId: row.groupId,
+    licenseId: row.licenseId,
+    deviceName: row.deviceName,
+    apiToken: row.apiToken,
+    registeredAt: row.registeredAt.toISOString(),
+    lastSeenAt: row.lastSeenAt.toISOString(),
+    lastSyncAt: row.lastSyncAt ? row.lastSyncAt.toISOString() : null,
+    lastMarkerHash: row.lastMarkerHash ?? null,
+    isFixedMaster: row.isFixedMaster,
+  };
 }
 
-async function readStore(): Promise<LicenseStoreFile> {
-  try {
-    const raw = await readFile(STORE_FILE, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "version" in parsed &&
-      "licenses" in parsed
-    ) {
-      const store = parsed as LicenseStoreFile;
-      // Backfill storageBackends for stores created before Phase 2
-      if (!store.storageBackends) {
-        store.storageBackends = {};
-      }
-      // Backfill apiToken for devices registered before token generation
-      for (const device of Object.values(store.devices)) {
-        if (!device.apiToken) {
-          device.apiToken = generateApiToken();
-        }
-      }
-      return store;
-    }
-    return emptyStore();
-  } catch (error: unknown) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return emptyStore();
-    }
-    throw error;
-  }
+function mapBackend(row: PrismaStorageBackend): StorageBackendConfig {
+  const config = (row.config ?? {}) as Record<string, unknown>;
+  return {
+    id: row.id,
+    type: row.type as StorageBackendType,
+    name: row.name,
+    basePath: row.basePath,
+    maxFileSizeMb: row.maxFileSizeMb,
+    sessionTtlMinutes: row.sessionTtlMinutes,
+    createdAt: row.createdAt.toISOString(),
+    ...config,
+  } as StorageBackendConfig;
 }
 
-async function writeStore(store: LicenseStoreFile): Promise<void> {
-  await ensureDataDir();
-  // Atomic write: write to temp file then rename to prevent corruption on crash
-  const tmpFile = `${STORE_FILE}.${Date.now()}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(store, null, 2), "utf8");
-  await rename(tmpFile, STORE_FILE);
-}
-
-// ---------------------------------------------------------------------------
-// Mutex
-// ---------------------------------------------------------------------------
-
-let mutex: Promise<void> = Promise.resolve();
-
-async function withMutex<T>(work: () => Promise<T>): Promise<T> {
-  const previous = mutex;
-  let release: () => void = () => {};
-  mutex = new Promise<void>((resolve) => {
-    release = resolve;
+async function activeDeviceIds(licenseId: string): Promise<string[]> {
+  const devices = await prisma.licenseDevice.findMany({
+    where: { licenseId },
+    select: { deviceId: true },
   });
-  await previous;
-  try {
-    return await work();
-  } finally {
-    release();
-  }
+  return devices.map((d) => d.deviceId);
 }
 
 // ---------------------------------------------------------------------------
@@ -113,37 +110,39 @@ export async function createLicense(
   maxDevices?: number,
   expiresAt?: string | null,
 ): Promise<License> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const license: License = {
+  const row = await prisma.license.create({
+    data: {
       id: randomUUID(),
       licenseKey: generateLicenseKey(plan),
       groupId,
       plan,
       status: "active",
-      createdAt: nowIso(),
-      expiresAt: expiresAt ?? null,
       maxDevices: maxDevices ?? PLAN_DEFAULTS[plan].maxDevices,
-      activeDevices: [],
-    };
-    store.licenses[license.id] = license;
-    await writeStore(store);
-    return license;
+      createdAt: new Date(),
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+    },
   });
+  return mapLicense(row, []);
 }
 
 export async function getLicense(id: string): Promise<License | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.licenses[id] ?? null;
-  });
+  const row = await prisma.license.findUnique({ where: { id } });
+  if (!row) return null;
+  return mapLicense(row, await activeDeviceIds(id));
 }
 
 export async function getAllLicenses(): Promise<License[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.licenses);
-  });
+  const [licenses, devices] = await Promise.all([
+    prisma.license.findMany(),
+    prisma.licenseDevice.findMany({ select: { licenseId: true, deviceId: true } }),
+  ]);
+  const byLicense = new Map<string, string[]>();
+  for (const d of devices) {
+    const list = byLicense.get(d.licenseId) ?? [];
+    list.push(d.deviceId);
+    byLicense.set(d.licenseId, list);
+  }
+  return licenses.map((l) => mapLicense(l, byLicense.get(l.id) ?? []));
 }
 
 export async function updateLicense(
@@ -155,37 +154,31 @@ export async function updateLicense(
     expiresAt?: string | null;
   },
 ): Promise<License | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const license = store.licenses[id];
-    if (!license) return null;
+  const exists = await prisma.license.findUnique({ where: { id } });
+  if (!exists) return null;
 
-    if (updates.plan !== undefined) license.plan = updates.plan;
-    if (updates.status !== undefined) license.status = updates.status;
-    if (updates.maxDevices !== undefined) license.maxDevices = updates.maxDevices;
-    if (updates.expiresAt !== undefined) license.expiresAt = updates.expiresAt;
+  const data: Prisma.LicenseUpdateInput = {};
+  if (updates.plan !== undefined) data.plan = updates.plan;
+  if (updates.status !== undefined) data.status = updates.status;
+  if (updates.maxDevices !== undefined) data.maxDevices = updates.maxDevices;
+  if (updates.expiresAt !== undefined) {
+    data.expiresAt = updates.expiresAt ? new Date(updates.expiresAt) : null;
+  }
 
-    await writeStore(store);
-    return license;
-  });
+  const row = await prisma.license.update({ where: { id }, data });
+  return mapLicense(row, await activeDeviceIds(id));
 }
 
 export async function deleteLicense(id: string): Promise<boolean> {
-  return withMutex(async () => {
-    const store = await readStore();
-    if (!store.licenses[id]) return false;
-    delete store.licenses[id];
+  const existing = await prisma.license.findUnique({ where: { id } });
+  if (!existing) return false;
 
-    // Remove associated devices
-    for (const [deviceId, device] of Object.entries(store.devices)) {
-      if (device.licenseId === id) {
-        delete store.devices[deviceId];
-      }
-    }
-
-    await writeStore(store);
-    return true;
-  });
+  // Remove associated devices, then the license.
+  await prisma.$transaction([
+    prisma.licenseDevice.deleteMany({ where: { licenseId: id } }),
+    prisma.license.delete({ where: { id } }),
+  ]);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +194,8 @@ export async function createGroup(
   maxSyncFrequencyHours?: number | null,
   maxDatabaseSizeMb?: number | null,
 ): Promise<ClientGroup> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const group: ClientGroup = {
+  const row = await prisma.group.create({
+    data: {
       id: randomUUID(),
       name,
       ownerId,
@@ -213,25 +205,19 @@ export async function createGroup(
       syncPriority: {},
       maxSyncFrequencyHours: maxSyncFrequencyHours ?? null,
       maxDatabaseSizeMb: maxDatabaseSizeMb ?? null,
-    };
-    store.groups[group.id] = group;
-    await writeStore(store);
-    return group;
+    },
   });
+  return mapGroup(row);
 }
 
 export async function getGroup(id: string): Promise<ClientGroup | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.groups[id] ?? null;
-  });
+  const row = await prisma.group.findUnique({ where: { id } });
+  return row ? mapGroup(row) : null;
 }
 
 export async function getAllGroups(): Promise<ClientGroup[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.groups);
-  });
+  const rows = await prisma.group.findMany();
+  return rows.map(mapGroup);
 }
 
 export async function updateGroup(
@@ -245,54 +231,39 @@ export async function updateGroup(
     maxDatabaseSizeMb?: number | null;
   },
 ): Promise<ClientGroup | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const group = store.groups[id];
-    if (!group) return null;
+  const exists = await prisma.group.findUnique({ where: { id } });
+  if (!exists) return null;
 
-    if (updates.name !== undefined) group.name = updates.name;
-    if (updates.licenseId !== undefined) group.licenseId = updates.licenseId;
-    if (updates.storageBackendId !== undefined) group.storageBackendId = updates.storageBackendId;
-    if (updates.fixedMasterDeviceId !== undefined) group.fixedMasterDeviceId = updates.fixedMasterDeviceId;
-    if (updates.maxSyncFrequencyHours !== undefined) group.maxSyncFrequencyHours = updates.maxSyncFrequencyHours;
-    if (updates.maxDatabaseSizeMb !== undefined) group.maxDatabaseSizeMb = updates.maxDatabaseSizeMb;
+  const data: Prisma.GroupUpdateInput = {};
+  if (updates.name !== undefined) data.name = updates.name;
+  if (updates.licenseId !== undefined) data.licenseId = updates.licenseId;
+  if (updates.storageBackendId !== undefined) data.storageBackendId = updates.storageBackendId;
+  if (updates.fixedMasterDeviceId !== undefined) data.fixedMasterDeviceId = updates.fixedMasterDeviceId;
+  if (updates.maxSyncFrequencyHours !== undefined) data.maxSyncFrequencyHours = updates.maxSyncFrequencyHours;
+  if (updates.maxDatabaseSizeMb !== undefined) data.maxDatabaseSizeMb = updates.maxDatabaseSizeMb;
 
-    await writeStore(store);
-    return group;
-  });
+  const row = await prisma.group.update({ where: { id }, data });
+  return mapGroup(row);
 }
 
 export async function deleteGroup(id: string): Promise<{ deleted: boolean; reason?: string }> {
-  return withMutex(async () => {
-    const store = await readStore();
-    if (!store.groups[id]) return { deleted: false, reason: "not_found" };
+  const group = await prisma.group.findUnique({ where: { id } });
+  if (!group) return { deleted: false, reason: "not_found" };
 
-    // Block if any license references this group
-    const assignedLicenses = Object.values(store.licenses).filter(
-      (l) => l.groupId === id,
-    );
-    if (assignedLicenses.length > 0) {
-      return {
-        deleted: false,
-        reason: `Grupa ma ${assignedLicenses.length} przypisanych licencji`,
-      };
-    }
+  // Block if any license references this group.
+  const licenseCount = await prisma.license.count({ where: { groupId: id } });
+  if (licenseCount > 0) {
+    return { deleted: false, reason: `Grupa ma ${licenseCount} przypisanych licencji` };
+  }
 
-    // Block if any device references this group
-    const assignedDevices = Object.values(store.devices).filter(
-      (d) => d.groupId === id,
-    );
-    if (assignedDevices.length > 0) {
-      return {
-        deleted: false,
-        reason: `Grupa ma ${assignedDevices.length} przypisanych urzadzen`,
-      };
-    }
+  // Block if any device references this group.
+  const deviceCount = await prisma.licenseDevice.count({ where: { groupId: id } });
+  if (deviceCount > 0) {
+    return { deleted: false, reason: `Grupa ma ${deviceCount} przypisanych urzadzen` };
+  }
 
-    delete store.groups[id];
-    await writeStore(store);
-    return { deleted: true };
-  });
+  await prisma.group.delete({ where: { id } });
+  return { deleted: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -300,17 +271,14 @@ export async function deleteGroup(id: string): Promise<{ deleted: boolean; reaso
 // ---------------------------------------------------------------------------
 
 export async function findLicenseByKey(licenseKey: string): Promise<License | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.licenses).find((l) => l.licenseKey === licenseKey) ?? null;
-  });
+  const row = await prisma.license.findUnique({ where: { licenseKey } });
+  if (!row) return null;
+  return mapLicense(row, await activeDeviceIds(row.id));
 }
 
 export async function getGroupForLicense(licenseId: string): Promise<ClientGroup | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.groups).find((g) => g.licenseId === licenseId) ?? null;
-  });
+  const row = await prisma.group.findFirst({ where: { licenseId } });
+  return row ? mapGroup(row) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,59 +291,59 @@ export async function registerDevice(
   deviceId: string,
   deviceName: string,
 ): Promise<DeviceRegistration> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const license = store.licenses[licenseId];
+  return prisma.$transaction(async (tx) => {
+    const license = await tx.license.findUnique({ where: { id: licenseId } });
     if (!license) throw new Error(`License not found: ${licenseId}`);
 
-    // Check if device already registered
-    const existing = store.devices[deviceId];
+    const now = new Date();
+
+    // Already registered under this license — just touch lastSeenAt.
+    const existing = await tx.licenseDevice.findUnique({ where: { deviceId } });
     if (existing && existing.licenseId === licenseId) {
-      existing.lastSeenAt = nowIso();
-      await writeStore(store);
-      return existing;
+      const updated = await tx.licenseDevice.update({
+        where: { deviceId },
+        data: { lastSeenAt: now },
+      });
+      return mapDevice(updated);
     }
 
-    // Check device limit
-    if (license.activeDevices.length >= license.maxDevices) {
+    // Device limit (counts only devices currently under this license).
+    const activeCount = await tx.licenseDevice.count({ where: { licenseId } });
+    if (activeCount >= license.maxDevices) {
       throw new Error(`Device limit reached (${license.maxDevices})`);
     }
 
-    const group = store.groups[groupId];
-    const device: DeviceRegistration = {
+    const group = await tx.group.findUnique({ where: { id: groupId } });
+    const record = {
       deviceId,
       groupId,
       licenseId,
       deviceName,
       apiToken: generateApiToken(),
-      registeredAt: nowIso(),
-      lastSeenAt: nowIso(),
+      registeredAt: now,
+      lastSeenAt: now,
       lastSyncAt: null,
       lastMarkerHash: null,
       isFixedMaster: group?.fixedMasterDeviceId === deviceId,
     };
-    store.devices[deviceId] = device;
-    license.activeDevices.push(deviceId);
-    await writeStore(store);
-    return device;
+    // upsert: overwrites a device previously registered under another license.
+    const row = await tx.licenseDevice.upsert({
+      where: { deviceId },
+      create: record,
+      update: record,
+    });
+    return mapDevice(row);
   });
 }
 
 /**
  * Update lastSeenAt for a known device (called on every authenticated sync request).
- * Fire-and-forget — failures are silently ignored so sync flow is not blocked.
- *
- * NOTE: This reads/writes the entire store file on every call. If traffic
- * grows, consider batching updates or using a lightweight in-memory cache
- * with periodic flushes.
+ * Fire-and-forget — no-op if the device is unknown.
  */
 export async function touchDeviceLastSeen(deviceId: string): Promise<void> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const device = store.devices[deviceId];
-    if (!device) return;
-    device.lastSeenAt = nowIso();
-    await writeStore(store);
+  await prisma.licenseDevice.updateMany({
+    where: { deviceId },
+    data: { lastSeenAt: new Date() },
   });
 }
 
@@ -386,105 +354,81 @@ export async function updateDeviceLastSync(
   deviceId: string,
   markerHash?: string | null,
 ): Promise<void> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const device = store.devices[deviceId];
-    if (!device) return;
-    device.lastSyncAt = nowIso();
-    device.lastSeenAt = nowIso();
-    if (markerHash !== undefined) {
-      device.lastMarkerHash = markerHash;
-    }
-    await writeStore(store);
-  });
+  const now = new Date();
+  const data: Prisma.LicenseDeviceUpdateManyMutationInput = {
+    lastSyncAt: now,
+    lastSeenAt: now,
+  };
+  if (markerHash !== undefined) {
+    data.lastMarkerHash = markerHash;
+  }
+  await prisma.licenseDevice.updateMany({ where: { deviceId }, data });
 }
 
 export async function getDevice(deviceId: string): Promise<DeviceRegistration | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.devices[deviceId] ?? null;
-  });
+  const row = await prisma.licenseDevice.findUnique({ where: { deviceId } });
+  return row ? mapDevice(row) : null;
 }
 
 export async function getDevicesForLicense(licenseId: string): Promise<DeviceRegistration[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.devices).filter((d) => d.licenseId === licenseId);
-  });
+  const rows = await prisma.licenseDevice.findMany({ where: { licenseId } });
+  return rows.map(mapDevice);
 }
 
 export async function getAllDevices(): Promise<DeviceRegistration[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.devices);
-  });
+  const rows = await prisma.licenseDevice.findMany();
+  return rows.map(mapDevice);
 }
 
 export async function deregisterDevice(
   licenseId: string,
   deviceId: string,
 ): Promise<boolean> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const device = store.devices[deviceId];
-    if (!device || device.licenseId !== licenseId) return false;
+  const device = await prisma.licenseDevice.findUnique({ where: { deviceId } });
+  if (!device || device.licenseId !== licenseId) return false;
 
-    delete store.devices[deviceId];
-
-    // Remove from license activeDevices
-    const license = store.licenses[licenseId];
-    if (license) {
-      license.activeDevices = license.activeDevices.filter((d) => d !== deviceId);
-    }
-
-    await writeStore(store);
-    return true;
-  });
+  await prisma.licenseDevice.delete({ where: { deviceId } });
+  return true;
 }
 
 export async function getDevicesForUser(userId: string): Promise<DeviceRegistration[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    // Find groups owned by this user
-    const userGroupIds = new Set(
-      Object.values(store.groups)
-        .filter((g) => g.ownerId === userId)
-        .map((g) => g.id),
-    );
-    return Object.values(store.devices).filter((d) => userGroupIds.has(d.groupId));
+  const groups = await prisma.group.findMany({
+    where: { ownerId: userId },
+    select: { id: true },
   });
+  const groupIds = groups.map((g) => g.id);
+  if (groupIds.length === 0) return [];
+
+  const rows = await prisma.licenseDevice.findMany({
+    where: { groupId: { in: groupIds } },
+  });
+  return rows.map(mapDevice);
 }
 
 export async function regenerateDeviceToken(
   licenseId: string,
   deviceId: string,
 ): Promise<DeviceRegistration | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const device = store.devices[deviceId];
-    if (!device || device.licenseId !== licenseId) return null;
+  const device = await prisma.licenseDevice.findUnique({ where: { deviceId } });
+  if (!device || device.licenseId !== licenseId) return null;
 
-    device.apiToken = generateApiToken();
-    await writeStore(store);
-    return device;
+  const row = await prisma.licenseDevice.update({
+    where: { deviceId },
+    data: { apiToken: generateApiToken() },
   });
+  return mapDevice(row);
 }
 
 export async function findDeviceByToken(
   token: string,
 ): Promise<{ device: DeviceRegistration; group: ClientGroup } | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    for (const device of Object.values(store.devices)) {
-      if (device.apiToken === token) {
-        const group = store.groups[device.groupId];
-        if (group) {
-          return { device, group };
-        }
-      }
-    }
-    return null;
-  });
+  const device = await prisma.licenseDevice.findUnique({ where: { apiToken: token } });
+  if (!device) return null;
+
+  const group = await prisma.group.findUnique({ where: { id: device.groupId } });
+  if (!group) return null;
+
+  return { device: mapDevice(device), group: mapGroup(group) };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,73 +438,79 @@ export async function findDeviceByToken(
 export async function createStorageBackend(
   config: Omit<StorageBackendConfig, "id" | "createdAt">,
 ): Promise<StorageBackendConfig> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const id = randomUUID();
-    const backend = {
-      ...config,
-      id,
-      createdAt: nowIso(),
-    } as StorageBackendConfig;
-    store.storageBackends[id] = backend;
-    await writeStore(store);
-    return backend;
+  const { type, name, basePath, maxFileSizeMb, sessionTtlMinutes, ...typeSpecific } = config;
+  const row = await prisma.storageBackend.create({
+    data: {
+      id: randomUUID(),
+      type,
+      name,
+      basePath,
+      maxFileSizeMb,
+      sessionTtlMinutes,
+      createdAt: new Date(),
+      config: typeSpecific as Prisma.InputJsonValue,
+    },
   });
+  return mapBackend(row);
 }
 
 export async function getStorageBackend(id: string): Promise<StorageBackendConfig | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return store.storageBackends[id] ?? null;
-  });
+  const row = await prisma.storageBackend.findUnique({ where: { id } });
+  return row ? mapBackend(row) : null;
 }
 
 export async function getAllStorageBackends(): Promise<StorageBackendConfig[]> {
-  return withMutex(async () => {
-    const store = await readStore();
-    return Object.values(store.storageBackends);
-  });
+  const rows = await prisma.storageBackend.findMany();
+  return rows.map(mapBackend);
 }
 
 export async function updateStorageBackend(
   id: string,
   updates: Partial<Omit<StorageBackendConfig, "id" | "createdAt" | "type">>,
 ): Promise<StorageBackendConfig | null> {
-  return withMutex(async () => {
-    const store = await readStore();
-    const backend = store.storageBackends[id];
-    if (!backend) return null;
+  const existing = await prisma.storageBackend.findUnique({ where: { id } });
+  if (!existing) return null;
 
-    // Only apply keys that are explicitly provided (not undefined)
-    // so that omitting a field (e.g. password) preserves the existing value.
-    for (const [key, value] of Object.entries(updates)) {
-      if (value !== undefined) {
-        (backend as unknown as Record<string, unknown>)[key] = value;
-      }
+  const baseKeys = new Set(["name", "basePath", "maxFileSizeMb", "sessionTtlMinutes"]);
+  const data: Prisma.StorageBackendUpdateInput = {};
+  const nextConfig: Record<string, unknown> = {
+    ...((existing.config ?? {}) as Record<string, unknown>),
+  };
+
+  // Only apply explicitly-provided keys so that omitting e.g. password
+  // preserves the existing value.
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) continue;
+    if (baseKeys.has(key)) {
+      (data as Record<string, unknown>)[key] = value;
+    } else {
+      nextConfig[key] = value;
     }
-    await writeStore(store);
-    return backend;
-  });
+  }
+  data.config = nextConfig as Prisma.InputJsonValue;
+
+  const row = await prisma.storageBackend.update({ where: { id }, data });
+  return mapBackend(row);
 }
 
 export async function deleteStorageBackend(id: string): Promise<{ deleted: boolean; reason?: string }> {
-  return withMutex(async () => {
-    const store = await readStore();
-    if (!store.storageBackends[id]) return { deleted: false, reason: "not_found" };
+  const existing = await prisma.storageBackend.findUnique({ where: { id } });
+  if (!existing) return { deleted: false, reason: "not_found" };
 
-    // Check if any group references this backend
-    const assignedGroups = Object.values(store.groups).filter(
-      (g) => g.storageBackendId === id,
-    );
-    if (assignedGroups.length > 0) {
-      return {
-        deleted: false,
-        reason: `Backend is assigned to ${assignedGroups.length} group(s): ${assignedGroups.map((g) => g.name).join(", ")}`,
-      };
-    }
-
-    delete store.storageBackends[id];
-    await writeStore(store);
-    return { deleted: true };
+  // Block if any group references this backend.
+  const assignedGroups = await prisma.group.findMany({
+    where: { storageBackendId: id },
+    select: { name: true },
   });
+  if (assignedGroups.length > 0) {
+    return {
+      deleted: false,
+      reason: `Backend is assigned to ${assignedGroups.length} group(s): ${assignedGroups
+        .map((g) => g.name)
+        .join(", ")}`,
+    };
+  }
+
+  await prisma.storageBackend.delete({ where: { id } });
+  return { deleted: true };
 }

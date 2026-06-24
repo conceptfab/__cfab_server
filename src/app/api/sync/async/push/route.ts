@@ -4,14 +4,12 @@ import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { handleAsyncPush } from "@/lib/sync/async-delta";
 import type { AsyncPushBody, AsyncPushResponse } from "@/lib/sync/session-contracts";
 import { badRequest } from "@/lib/http/error";
-import { ensureCleanupRunning } from "@/lib/sync/session-cleanup";
 
 export async function OPTIONS(request: Request) {
   return handleSyncOptions(request);
 }
 
 export async function POST(request: Request) {
-  ensureCleanupRunning();
   return handleSyncPost<AsyncPushBody, AsyncPushResponse>(request, {
     route: "async-push",
     parseBody: (raw: unknown) => {

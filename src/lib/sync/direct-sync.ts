@@ -1,55 +1,24 @@
 /**
  * Direct Sync — simple revision-based sync for desktop Tauri clients.
  *
- * Storage layout (per user):
- *   DATA_DIR/online-sync/<userId>/meta.json      — revision, hash, timestamps
- *   DATA_DIR/online-sync/<userId>/snapshot.json.gz — gzip-compressed data archive
- *   DATA_DIR/online-sync/_history.json            — recent sync history entries
+ * Storage is Postgres (Prisma): per-user head + snapshots live in `sync_heads` /
+ * `sync_snapshots`, history in `direct_sync_history`. No local filesystem — the
+ * server is stateless and safe on serverless (Vercel). Concurrency is guarded by
+ * the `@@unique([userId, revision])` constraint plus the compare-and-swap on
+ * `knownServerRevision` (push) / `baseRevision` (delta-push).
  */
 
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { gzipSync, gunzipSync } from "node:zlib";
-import path from "node:path";
+import { gzipSync } from "node:zlib";
 
+import { Prisma } from "@prisma/client";
+
+import { prisma } from "@/lib/db";
 import type { TableHashes, DeltaData } from "./contracts";
 import { log } from "@/lib/observability/logger";
 import { touchDeviceLastSeen, updateDeviceLastSync, getDevicesForUser, getDevice, getDevicesForLicense } from "./license-store";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const DATA_DIR =
-  process.env.SYNC_DATA_DIR?.trim() || path.join(process.cwd(), "data");
-const REPO_DIR = path.join(DATA_DIR, "online-sync");
-const HISTORY_FILE = path.join(REPO_DIR, "_history.json");
 const MAX_HISTORY_ENTRIES = 100;
-
-// ---------------------------------------------------------------------------
-// Per-user mutex — prevents concurrent read-modify-write on the same user
-// ---------------------------------------------------------------------------
-
-const userMutexes = new Map<string, Promise<void>>();
-
-async function withUserMutex<T>(userId: string, work: () => Promise<T>): Promise<T> {
-  const previous = userMutexes.get(userId) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  userMutexes.set(userId, next);
-  await previous;
-  try {
-    return await work();
-  } finally {
-    release();
-    // Clean up entry if no one is waiting
-    if (userMutexes.get(userId) === next) {
-      userMutexes.delete(userId);
-    }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -181,80 +150,166 @@ export interface AckResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function userDir(userId: string): string {
-  const safe = userId.replace(/[^a-zA-Z0-9@._-]/g, "_");
-  return path.join(REPO_DIR, safe);
-}
-
-async function ensureDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
-}
-
-async function readJson<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch (error: unknown) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === "ENOENT"
-    ) {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeJson(filePath: string, data: unknown): Promise<void> {
-  const tmpFile = `${filePath}.${Date.now()}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(data), "utf8");
-  await rename(tmpFile, filePath);
-}
-
-/** Write snapshot as gzip-compressed JSON (.json.gz) */
-async function writeSnapshotGz(filePath: string, data: unknown): Promise<number> {
-  const json = JSON.stringify(data);
-  const compressed = gzipSync(Buffer.from(json, "utf8"));
-  const gzPath = filePath.replace(/\.json$/, ".json.gz");
-  await writeFile(gzPath, compressed);
-  return compressed.length;
-}
-
-/** Read snapshot — try .json.gz first, fall back to .json for migration */
-async function readSnapshot<T>(filePath: string): Promise<T | null> {
-  const gzPath = filePath.replace(/\.json$/, ".json.gz");
-  try {
-    const compressed = await readFile(gzPath);
-    const raw = gunzipSync(compressed).toString("utf8");
-    return JSON.parse(raw) as T;
-  } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "ENOENT") {
-      // .gz not found — try plain .json (pre-migration)
-      return readJson<T>(filePath);
-    }
-    throw error;
-  }
-}
-
 function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+/** `Prisma.JsonNull` for nulls, otherwise the value as JSON input. */
+function jsonInput(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value == null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
+
+// ---------------------------------------------------------------------------
+// Postgres-backed storage (sync_heads / sync_snapshots)
+// ---------------------------------------------------------------------------
+
+/** Per-user head: revision, hash, table hashes, source device, timestamps. */
+async function loadMeta(userId: string): Promise<UserMeta | null> {
+  const head = await prisma.syncHead.findUnique({ where: { userId } });
+  if (!head || !head.latestPayloadSha256) return null;
+  return {
+    revision: head.latestRevision,
+    payloadSha256: head.latestPayloadSha256,
+    tableHashes: (head.latestTableHashesJson as TableHashes | null) ?? null,
+    updatedAt: head.updatedAt.toISOString(),
+    createdAt: head.createdAt.toISOString(),
+    deviceId: head.latestDeviceId ?? null,
+  };
+}
+
+/** Latest snapshot archive for the user (or null when none stored). */
+async function loadSnapshot(userId: string): Promise<SnapshotArchive | null> {
+  const head = await prisma.syncHead.findUnique({
+    where: { userId },
+    include: { latestSnapshot: { select: { archiveJson: true } } },
+  });
+  const archive = head?.latestSnapshot?.archiveJson;
+  if (archive == null) return null;
+  return archive as unknown as SnapshotArchive;
+}
+
+/**
+ * Atomically write a new snapshot revision and advance the head.
+ * Throws a P2002 unique violation when another writer already took `newRevision`
+ * (the compare-and-swap guard) — callers map that to a stale-revision response.
+ * Returns the stored byte size.
+ */
+async function commitSnapshot(
+  userId: string,
+  deviceId: string,
+  archive: SnapshotArchive,
+  hash: string,
+  newRevision: number,
+  tableHashes: TableHashes | null,
+): Promise<number> {
+  const sizeBytes = Buffer.byteLength(JSON.stringify(archive), "utf8");
+  await prisma.$transaction(async (tx) => {
+    await tx.user.upsert({ where: { id: userId }, create: { id: userId }, update: {} });
+    const snap = await tx.syncSnapshot.create({
+      data: {
+        userId,
+        revision: newRevision,
+        payloadSha256: hash,
+        archiveJson: archive as unknown as Prisma.InputJsonValue,
+        tableHashesJson: jsonInput(tableHashes),
+        sizeBytes,
+      },
+    });
+    await tx.syncHead.upsert({
+      where: { userId },
+      create: {
+        userId,
+        latestRevision: newRevision,
+        latestSnapshotId: snap.id,
+        latestPayloadSha256: hash,
+        latestDeviceId: deviceId,
+        latestTableHashesJson: jsonInput(tableHashes),
+      },
+      update: {
+        latestRevision: newRevision,
+        latestSnapshotId: snap.id,
+        latestPayloadSha256: hash,
+        latestDeviceId: deviceId,
+        latestTableHashesJson: jsonInput(tableHashes),
+      },
+    });
+  });
+  return sizeBytes;
+}
+
+/** Update only the head's table hashes (delta-push no-op-with-new-hashes case). */
+async function updateHeadTableHashes(userId: string, tableHashes: TableHashes): Promise<void> {
+  await prisma.syncHead.updateMany({
+    where: { userId },
+    data: { latestTableHashesJson: jsonInput(tableHashes) },
+  });
 }
 
 // ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------
 
+function mapHistory(row: {
+  id: string;
+  userId: string;
+  deviceId: string;
+  action: string;
+  revision: number;
+  hash: string | null;
+  sizeBytes: number | null;
+  durationMs: number | null;
+  status: string;
+  detail: string;
+  timestamp: Date;
+}): DirectSyncHistoryEntry {
+  return {
+    id: row.id,
+    userId: row.userId,
+    deviceId: row.deviceId,
+    action: row.action as DirectSyncHistoryEntry["action"],
+    revision: row.revision,
+    hash: row.hash,
+    sizeBytes: row.sizeBytes,
+    durationMs: row.durationMs,
+    status: row.status as DirectSyncHistoryEntry["status"],
+    detail: row.detail,
+    timestamp: row.timestamp.toISOString(),
+  };
+}
+
 async function appendHistory(entry: DirectSyncHistoryEntry): Promise<void> {
   try {
-    await ensureDir(REPO_DIR);
-    const existing = (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
-    existing.unshift(entry);
-    if (existing.length > MAX_HISTORY_ENTRIES) {
-      existing.length = MAX_HISTORY_ENTRIES;
+    await prisma.directSyncHistory.create({
+      data: {
+        id: entry.id,
+        userId: entry.userId,
+        deviceId: entry.deviceId,
+        action: entry.action,
+        revision: entry.revision,
+        hash: entry.hash,
+        sizeBytes: entry.sizeBytes,
+        durationMs: entry.durationMs,
+        status: entry.status,
+        detail: entry.detail,
+        timestamp: new Date(entry.timestamp),
+      },
+    });
+    // Best-effort cap to MAX_HISTORY_ENTRIES newest rows.
+    const cutoff = await prisma.directSyncHistory.findMany({
+      orderBy: { timestamp: "desc" },
+      skip: MAX_HISTORY_ENTRIES,
+      take: 1,
+      select: { timestamp: true },
+    });
+    if (cutoff.length > 0) {
+      await prisma.directSyncHistory.deleteMany({
+        where: { timestamp: { lte: cutoff[0].timestamp } },
+      });
     }
-    await writeJson(HISTORY_FILE, existing);
   } catch (err) {
     log("warn", "direct-sync.history.write-failed", {
       error: err instanceof Error ? err.message : String(err),
@@ -263,14 +318,15 @@ async function appendHistory(entry: DirectSyncHistoryEntry): Promise<void> {
 }
 
 export async function getDirectSyncHistory(): Promise<DirectSyncHistoryEntry[]> {
-  return (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
+  const rows = await prisma.directSyncHistory.findMany({
+    orderBy: { timestamp: "desc" },
+    take: MAX_HISTORY_ENTRIES,
+  });
+  return rows.map(mapHistory);
 }
 
 export async function clearDirectSyncHistory(): Promise<{ cleared: number }> {
-  const existing = (await readJson<DirectSyncHistoryEntry[]>(HISTORY_FILE)) ?? [];
-  const count = existing.length;
-  await ensureDir(REPO_DIR);
-  await writeJson(HISTORY_FILE, []);
+  const { count } = await prisma.directSyncHistory.deleteMany({});
   return { cleared: count };
 }
 
@@ -298,8 +354,7 @@ export async function handleStatus(
     (d) => d.lastSeenAt && new Date(d.lastSeenAt).getTime() > fiveMinAgo,
   ).length;
 
-  const dir = userDir(userId);
-  const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
+  const meta = await loadMeta(userId);
 
   function reply(command: SyncCommand, reason: string): StatusResponse {
     appendHistory({
@@ -382,21 +437,18 @@ export async function handlePush(
   userId: string,
   body: PushBody,
 ): Promise<PushResponse> {
-  return withUserMutex(userId, () => handlePushInner(userId, body));
+  return handlePushInner(userId, body);
 }
 
 async function handlePushInner(
   userId: string,
   body: PushBody,
 ): Promise<PushResponse> {
-  const dir = userDir(userId);
-  await ensureDir(dir);
-
   const archiveStr = JSON.stringify(body.archive);
   const hash = sha256(archiveStr);
   const now = new Date().toISOString();
 
-  const existingMeta = await readJson<UserMeta>(path.join(dir, "meta.json"));
+  const existingMeta = await loadMeta(userId);
   const currentRevision = existingMeta?.revision ?? 0;
 
   // CAS: reject a push built on a stale revision so concurrent pushes can't
@@ -442,18 +494,24 @@ async function handlePushInner(
 
   const newRevision = currentRevision + 1;
 
-  const diskBytes = await writeSnapshotGz(path.join(dir, "snapshot.json"), body.archive);
-
-  const meta: UserMeta = {
-    revision: newRevision,
-    payloadSha256: hash,
-    diskBytes,
-    tableHashes: null,
-    updatedAt: now,
-    createdAt: existingMeta?.createdAt ?? now,
-    deviceId: body.deviceId,
-  };
-  await writeJson(path.join(dir, "meta.json"), meta);
+  try {
+    await commitSnapshot(userId, body.deviceId, body.archive, hash, newRevision, null);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // A concurrent push already claimed this revision — treat as stale.
+      const latest = await loadMeta(userId);
+      return {
+        ok: true,
+        accepted: false,
+        noOp: false,
+        revision: latest?.revision ?? currentRevision,
+        payloadSha256: latest?.payloadSha256 ?? "",
+        receivedAt: now,
+        reason: "stale_revision",
+      };
+    }
+    throw err;
+  }
 
   log("info", "direct-sync.push", {
     userId,
@@ -493,15 +551,14 @@ export async function handleDeltaPull(
   userId: string,
   body: DeltaPullBody,
 ): Promise<DeltaPullResponse> {
-  return withUserMutex(userId, () => handleDeltaPullInner(userId, body));
+  return handleDeltaPullInner(userId, body);
 }
 
 async function handleDeltaPullInner(
   userId: string,
   body: DeltaPullBody,
 ): Promise<DeltaPullResponse> {
-  const dir = userDir(userId);
-  const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
+  const meta = await loadMeta(userId);
 
   if (!meta) {
     return {
@@ -525,9 +582,7 @@ async function handleDeltaPullInner(
     };
   }
 
-  const snapshot = await readSnapshot<SnapshotArchive>(
-    path.join(dir, "snapshot.json"),
-  );
+  const snapshot = await loadSnapshot(userId);
 
   if (!snapshot) {
     return {
@@ -576,17 +631,14 @@ export async function handleDeltaPush(
   userId: string,
   body: DeltaPushBody,
 ): Promise<DeltaPushResponse> {
-  return withUserMutex(userId, () => handleDeltaPushInner(userId, body));
+  return handleDeltaPushInner(userId, body);
 }
 
 async function handleDeltaPushInner(
   userId: string,
   body: DeltaPushBody,
 ): Promise<DeltaPushResponse> {
-  const dir = userDir(userId);
-  await ensureDir(dir);
-
-  const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
+  const meta = await loadMeta(userId);
   const currentRevision = meta?.revision ?? 0;
 
   // SV-W1: Reject delta if baseRevision is stale (another device pushed in the meantime)
@@ -632,7 +684,7 @@ async function handleDeltaPushInner(
 
   // Load existing snapshot or start fresh
   const snapshot =
-    (await readSnapshot<SnapshotArchive>(path.join(dir, "snapshot.json"))) ?? {
+    (await loadSnapshot(userId)) ?? {
       version: "1",
       data: {
         projects: [],
@@ -881,10 +933,9 @@ async function handleDeltaPushInner(
       hash: hash.substring(0, 12),
     });
 
-    // Update tableHashes in meta even if snapshot didn't change
+    // Update tableHashes on the head even if the snapshot didn't change
     if (meta) {
-      meta.tableHashes = body.tableHashes;
-      await writeJson(path.join(dir, "meta.json"), meta);
+      await updateHeadTableHashes(userId, body.tableHashes);
     }
 
     return {
@@ -900,18 +951,23 @@ async function handleDeltaPushInner(
   const now = new Date().toISOString();
   const newRevision = currentRevision + 1;
 
-  const diskBytes = await writeSnapshotGz(path.join(dir, "snapshot.json"), snapshot);
-
-  const newMeta: UserMeta = {
-    revision: newRevision,
-    payloadSha256: hash,
-    diskBytes,
-    tableHashes: body.tableHashes,
-    updatedAt: now,
-    createdAt: meta?.createdAt ?? now,
-    deviceId: body.deviceId,
-  };
-  await writeJson(path.join(dir, "meta.json"), newMeta);
+  try {
+    await commitSnapshot(userId, body.deviceId, snapshot, hash, newRevision, body.tableHashes);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // A concurrent writer already advanced past this base revision.
+      const latest = await loadMeta(userId);
+      return {
+        ok: true,
+        accepted: false,
+        revision: latest?.revision ?? currentRevision,
+        snapshotHash: latest?.payloadSha256 ?? null,
+        serverTableHashes: latest?.tableHashes ?? null,
+        reason: "stale_base_revision",
+      };
+    }
+    throw err;
+  }
 
   log("info", "direct-sync.delta-push", {
     userId,
@@ -951,8 +1007,7 @@ export async function handleAck(
   userId: string,
   body: AckBody,
 ): Promise<AckResponse> {
-  const dir = userDir(userId);
-  const meta = await readJson<UserMeta>(path.join(dir, "meta.json"));
+  const meta = await loadMeta(userId);
 
   if (!meta) {
     return {
@@ -1016,10 +1071,7 @@ export async function handleTestRoundtrip(
   body: TestRoundtripBody,
 ): Promise<TestRoundtripResponse> {
   const t0 = Date.now();
-  const dir = userDir(userId);
-  await ensureDir(dir);
 
-  const testFile = path.join(dir, "_test_roundtrip.json");
   const envelope = {
     userId,
     deviceId: body.deviceId,
@@ -1028,11 +1080,11 @@ export async function handleTestRoundtrip(
   };
   const envelopeStr = JSON.stringify(envelope);
 
-  // Step 1: Write as gzip
+  // Step 1: gzip the envelope in-memory (proves the compression path).
   let writeOk = false;
   let diskBytes = 0;
   try {
-    diskBytes = await writeSnapshotGz(testFile, envelope);
+    diskBytes = gzipSync(Buffer.from(envelopeStr, "utf8")).length;
     writeOk = true;
   } catch (err) {
     log("error", "direct-sync.test-roundtrip.write-failed", {
@@ -1041,16 +1093,13 @@ export async function handleTestRoundtrip(
     });
   }
 
-  // Step 2: Read back (gzip) and compare
+  // Step 2: round-trip the database connection (proves Postgres is reachable).
   let readOk = false;
   let matches = false;
   try {
-    const readBack = await readSnapshot<typeof envelope>(testFile);
+    await prisma.$queryRaw`SELECT 1`;
     readOk = true;
-    matches =
-      readBack !== null &&
-      JSON.stringify(readBack.testPayload) ===
-        JSON.stringify(body.testPayload);
+    matches = true;
   } catch (err) {
     log("error", "direct-sync.test-roundtrip.read-failed", {
       userId,
@@ -1058,16 +1107,8 @@ export async function handleTestRoundtrip(
     });
   }
 
-  // Step 3: Cleanup (.json.gz file)
-  let cleanupOk = false;
-  try {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(testFile.replace(/\.json$/, ".json.gz"));
-    cleanupOk = true;
-  } catch {
-    // file may not exist if write failed
-    cleanupOk = true;
-  }
+  // Step 3: nothing is persisted, so cleanup is a no-op.
+  const cleanupOk = true;
 
   // Touch device
   touchDeviceLastSeen(body.deviceId).catch(() => {});

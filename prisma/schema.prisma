@@ -1,11 +1,15 @@
 generator client {
-  provider = "prisma-client-js"
-  output   = "../node_modules/.prisma/client"
+  provider      = "prisma-client-js"
+  output        = "../node_modules/.prisma/client"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Pooled connection (PgBouncer) for serverless runtime.
+  url       = env("DATABASE_URL")
+  // Direct (unpooled) connection for migrations / introspection.
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -43,10 +47,13 @@ model Device {
 }
 
 model SyncHead {
-  userId               String   @id @map("user_id")
-  latestRevision       Int      @default(0) @map("latest_revision")
-  latestSnapshotId     String?  @map("latest_snapshot_id")
-  latestPayloadSha256  String?  @map("latest_payload_sha256")
+  userId                String   @id @map("user_id")
+  latestRevision        Int      @default(0) @map("latest_revision")
+  latestSnapshotId      String?  @map("latest_snapshot_id")
+  latestPayloadSha256   String?  @map("latest_payload_sha256")
+  latestDeviceId        String?  @map("latest_device_id")
+  latestTableHashesJson Json?    @map("latest_table_hashes_json")
+  createdAt             DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -168,5 +175,111 @@ model AsyncDeltaPackage {
   @@index([groupId, status], map: "async_packages_group_status_idx")
   @@index([status, expiresAt], map: "async_packages_status_expires_idx")
   @@map("async_delta_packages")
+}
+
+// ---------------------------------------------------------------------------
+// Licensing (migrated from data/license-store.json)
+// Cross-references (groupId/licenseId) are loose string IDs — referential
+// integrity is enforced in license-store.ts, mirroring the prior JSON store.
+// ---------------------------------------------------------------------------
+
+model License {
+  id         String    @id
+  licenseKey String    @unique @map("license_key")
+  groupId    String    @map("group_id")
+  plan       String
+  status     String
+  maxDevices Int       @map("max_devices")
+  createdAt  DateTime  @map("created_at")
+  expiresAt  DateTime? @map("expires_at")
+
+  @@index([groupId], map: "licenses_group_id_idx")
+  @@map("licenses")
+}
+
+model Group {
+  id                    String  @id
+  name                  String
+  ownerId               String  @map("owner_id")
+  licenseId             String  @map("license_id")
+  storageBackendId      String  @map("storage_backend_id")
+  fixedMasterDeviceId   String? @map("fixed_master_device_id")
+  syncPriority          Json    @default("{}") @map("sync_priority")
+  maxSyncFrequencyHours Float?  @map("max_sync_frequency_hours")
+  maxDatabaseSizeMb     Int?    @map("max_database_size_mb")
+
+  @@index([ownerId], map: "client_groups_owner_id_idx")
+  @@index([licenseId], map: "client_groups_license_id_idx")
+  @@map("client_groups")
+}
+
+model LicenseDevice {
+  deviceId       String    @id @map("device_id")
+  groupId        String    @map("group_id")
+  licenseId      String    @map("license_id")
+  deviceName     String    @map("device_name")
+  apiToken       String    @unique @map("api_token")
+  registeredAt   DateTime  @map("registered_at")
+  lastSeenAt     DateTime  @map("last_seen_at")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  lastMarkerHash String?   @map("last_marker_hash")
+  isFixedMaster  Boolean   @default(false) @map("is_fixed_master")
+
+  @@index([licenseId], map: "license_devices_license_id_idx")
+  @@index([groupId], map: "license_devices_group_id_idx")
+  @@map("license_devices")
+}
+
+model StorageBackend {
+  id                String   @id
+  type              String
+  name              String
+  basePath          String   @map("base_path")
+  maxFileSizeMb     Int      @map("max_file_size_mb")
+  sessionTtlMinutes Int      @map("session_ttl_minutes")
+  createdAt         DateTime @map("created_at")
+  // Type-specific fields (host/port/username/password/secure/region/bucket/...).
+  config            Json
+
+  @@map("storage_backends")
+}
+
+// ---------------------------------------------------------------------------
+// Direct-sync history (migrated from data/online-sync/_history.json).
+// userId is a loose string (env-token or license device user) — no FK.
+// ---------------------------------------------------------------------------
+
+model DirectSyncHistory {
+  id         String   @id
+  userId     String   @map("user_id")
+  deviceId   String   @map("device_id")
+  action     String
+  revision   Int
+  hash       String?
+  sizeBytes  Int?     @map("size_bytes")
+  durationMs Int?     @map("duration_ms")
+  status     String
+  detail     String
+  timestamp  DateTime
+
+  @@index([timestamp], map: "direct_sync_history_timestamp_idx")
+  @@map("direct_sync_history")
+}
+
+// ---------------------------------------------------------------------------
+// Feedback reports (migrated from data/feedback/*). Attachments stored inline
+// as base64 in `attachments` JSON; large files are dropped to metadata only.
+// ---------------------------------------------------------------------------
+
+model Feedback {
+  id          String   @id
+  subject     String?
+  message     String?
+  version     String?
+  attachments Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt], map: "feedback_created_at_idx")
+  @@map("feedback")
 }
 
