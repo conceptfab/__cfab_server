@@ -20,6 +20,14 @@ export async function GET(request: Request): Promise<Response> {
   const requestId = getOrCreateRequestId(request);
 
   const secret = process.env.CRON_SECRET?.trim();
+  const isProd = process.env.NODE_ENV === "production";
+  if (!secret && isProd) {
+    log("error", "cron.session-cleanup.misconfigured", { requestId });
+    return NextResponse.json(
+      { ok: false, error: "cron_secret_not_configured" },
+      { status: 503, headers: { [REQUEST_ID_HEADER]: requestId, "cache-control": "no-store" } },
+    );
+  }
   if (secret) {
     const auth = request.headers.get("authorization");
     if (auth !== `Bearer ${secret}`) {
