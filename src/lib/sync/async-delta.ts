@@ -18,6 +18,7 @@ import {
   recordAsyncDelivery,
   getAckedDeviceIds,
   getActiveDeviceIdsForGroup,
+  getSenderCleanablePackages,
 } from "./session-store";
 import { getStorageBackend, getAllGroups } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
@@ -282,7 +283,10 @@ export async function handleAsyncCredentials(
     throw new Error("Not authorized for this group");
   }
 
-  if (pkg.status !== "pending") {
+  const isOwnerCleanup =
+    pkg.fromDeviceId === deviceId &&
+    (pkg.status === "delivered" || pkg.status === "expired");
+  if (pkg.status !== "pending" && !isOwnerCleanup) {
     throw new Error(`Package ${packageId} is not pending (status: ${pkg.status})`);
   }
 
@@ -315,4 +319,27 @@ export async function handleAsyncCredentials(
   }
 
   return { ok: true, storageCredentials };
+}
+
+// ---------------------------------------------------------------------------
+// Sent-cleanup: list sender's own packages eligible for FTP cleanup
+// ---------------------------------------------------------------------------
+
+export interface AsyncSentCleanupResponse {
+  ok: true;
+  packages: { packageId: string; storagePath: string }[];
+}
+
+export async function handleAsyncSentCleanup(
+  userId: string,
+  deviceId: string,
+  groupId: string,
+): Promise<AsyncSentCleanupResponse> {
+  const groups = await getAllGroups();
+  const group = groups.find((g) => g.id === groupId);
+  if (!group || group.ownerId !== userId) {
+    throw new Error("Not authorized for this group");
+  }
+  const packages = await getSenderCleanablePackages(groupId, deviceId);
+  return { ok: true, packages };
 }

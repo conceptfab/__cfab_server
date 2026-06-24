@@ -49,9 +49,14 @@ vi.mock("../session-store", () => ({
     if (p) p.status = status;
     return p ?? null;
   }),
+  getSenderCleanablePackages: vi.fn(async (groupId: string, deviceId: string) =>
+    state.packages
+      .filter((p) => p.groupId === groupId && p.fromDeviceId === deviceId &&
+        (p.status === "delivered" || p.status === "expired"))
+      .map((p) => ({ packageId: p.id, storagePath: p.storagePath }))),
 }));
 
-import { handleAsyncPending, handleAsyncAck } from "../async-delta";
+import { handleAsyncPending, handleAsyncAck, handleAsyncSentCleanup } from "../async-delta";
 
 function pkg(id: string, from: string) {
   return {
@@ -109,5 +114,15 @@ describe("async-delta ack (multi-receiver)", () => {
     await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
     await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
     expect(state.packages[0].status).toBe("delivered");
+  });
+});
+
+describe("async-delta sent-cleanup", () => {
+  it("lists sender's own delivered/expired packages only", async () => {
+    state.packages.push({ ...pkg("p1", "devA"), status: "delivered", storagePath: "/async/p1" });
+    state.packages.push({ ...pkg("p2", "devA"), status: "pending", storagePath: "/async/p2" });
+    state.packages.push({ ...pkg("p3", "devB"), status: "expired", storagePath: "/async/p3" });
+    const res = await handleAsyncSentCleanup("owner1", "devA", "G1");
+    expect(res.packages.map((p: any) => p.packageId).sort()).toEqual(["p1"]);
   });
 });

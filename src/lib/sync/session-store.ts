@@ -700,6 +700,23 @@ export async function getActiveDeviceIdsForGroup(groupId: string): Promise<strin
   return rows.map((r) => r.deviceId);
 }
 
+/** Paczki wysłane przez to urządzenie, które można już skasować z FTP (delivered/expired). */
+export async function getSenderCleanablePackages(
+  groupId: string,
+  deviceId: string,
+): Promise<{ packageId: string; storagePath: string }[]> {
+  const rows = await prisma.asyncDeltaPackage.findMany({
+    where: {
+      groupId,
+      fromDeviceId: deviceId,
+      status: { in: ["delivered", "expired"] },
+      storagePath: { not: "" },
+    },
+    select: { id: true, storagePath: true },
+  });
+  return rows.map((r) => ({ packageId: r.id, storagePath: r.storagePath }));
+}
+
 // ---------------------------------------------------------------------------
 // Sync history
 // ---------------------------------------------------------------------------
