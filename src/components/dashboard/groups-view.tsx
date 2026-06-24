@@ -1,4 +1,4 @@
-import { CreateGroupForm } from "@/components/group-form";
+import { CreateGroupForm, DeleteGroupButton } from "@/components/group-form";
 import { GroupBackendSelector } from "@/components/storage-backend-form";
 import type { ClientGroup, License, StorageBackendConfig } from "@/lib/sync/license-contracts";
 
@@ -27,7 +27,7 @@ export function GroupsView({
         ) : (
           <div className="dashboard-table-wrap">
             <table className="dashboard-table">
-              <thead><tr><th scope="col">Nazwa</th><th scope="col">Owner</th><th scope="col">Storage</th><th scope="col">Fixed master</th><th scope="col">Maks. sync</th><th scope="col">Maks. DB</th></tr></thead>
+              <thead><tr><th scope="col">Nazwa</th><th scope="col">Owner</th><th scope="col">Storage</th><th scope="col">Fixed master</th><th scope="col">Maks. sync</th><th scope="col">Maks. DB</th><th scope="col">Akcje</th></tr></thead>
               <tbody>
                 {groups.map((group) => (
                   <tr key={group.id}>
@@ -37,6 +37,7 @@ export function GroupsView({
                     <td data-label="Fixed master" className="dashboard-mono">{group.fixedMasterDeviceId?.slice(0, 10) ?? "—"}</td>
                     <td data-label="Maks. sync">{group.maxSyncFrequencyHours == null ? "—" : `${group.maxSyncFrequencyHours} h`}</td>
                     <td data-label="Maks. DB">{group.maxDatabaseSizeMb == null ? "—" : `${group.maxDatabaseSizeMb} MB`}</td>
+                    <td data-label="Akcje"><DeleteGroupButton groupId={group.id} groupName={group.name} /></td>
                   </tr>
                 ))}
               </tbody>

@@ -100,3 +100,43 @@ export function CreateGroupForm({ licenses, storageBackends }: CreateGroupFormPr
     </DashboardDrawer>
   );
 }
+
+// ---------------------------------------------------------------------------
+// DeleteGroupButton - usuwa grupe (blokowane, gdy ma licencje/urzadzenia)
+// ---------------------------------------------------------------------------
+
+export function DeleteGroupButton({ groupId, groupName }: { groupId: string; groupName: string }) {
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    if (deleting) return;
+    if (!confirm(`Na pewno usunac grupe "${groupName}"?`)) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/group/${groupId}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+
+      if (res.ok && json.ok && json.deleted) {
+        window.location.reload();
+      } else {
+        alert(json.error || `Nie udalo sie usunac grupy (HTTP ${res.status})`);
+        setDeleting(false);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDelete}
+      disabled={deleting}
+      className="inline-flex items-center rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
+    >
+      {deleting ? "..." : "Usun"}
+    </button>
+  );
+}
