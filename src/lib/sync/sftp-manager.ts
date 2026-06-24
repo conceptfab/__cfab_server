@@ -83,9 +83,14 @@ function createSftpAdapter(config: SftpStorageBackend): StorageAdapter {
   return {
     async createSessionDir(sessionId: string): Promise<string> {
       const sessionPath = `${config.basePath}${sessionId}`;
+      const isAsync = sessionId.startsWith("async/");
       await withSftp(async (sftp) => {
         await sftp.mkdir(`${sessionPath}/slave-upload`, true);
-        await sftp.mkdir(`${sessionPath}/master-merged`, true);
+        // master-merged is unused in the async store-and-forward model (F5): skip for async packages.
+        // Keep for legacy LAN/session sync dirs in case the client demon still reads downloadPath.
+        if (!isAsync) {
+          await sftp.mkdir(`${sessionPath}/master-merged`, true);
+        }
       });
       log("info", "sftp.session-dir.created", { sessionId, path: sessionPath, backendId: config.id });
       return sessionPath;
@@ -410,9 +415,14 @@ function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
   return {
     async createSessionDir(sessionId: string): Promise<string> {
       const sessionPath = `${config.basePath}${sessionId}`;
+      const isAsync = sessionId.startsWith("async/");
       await withFtp(async (client) => {
         await client.ensureDir(`${sessionPath}/slave-upload`);
-        await client.ensureDir(`${sessionPath}/master-merged`);
+        // master-merged is unused in the async store-and-forward model (F5): skip for async packages.
+        // Keep for legacy LAN/session sync dirs in case the client demon still reads downloadPath.
+        if (!isAsync) {
+          await client.ensureDir(`${sessionPath}/master-merged`);
+        }
       });
       log("info", "ftp.session-dir.created", { sessionId, path: sessionPath, backendId: config.id });
       return sessionPath;
