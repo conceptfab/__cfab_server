@@ -224,6 +224,7 @@ export async function updateGroup(
   id: string,
   updates: {
     name?: string;
+    ownerId?: string;
     licenseId?: string;
     storageBackendId?: string;
     fixedMasterDeviceId?: string | null;
@@ -236,6 +237,7 @@ export async function updateGroup(
 
   const data: Prisma.GroupUpdateInput = {};
   if (updates.name !== undefined) data.name = updates.name;
+  if (updates.ownerId !== undefined) data.ownerId = updates.ownerId;
   if (updates.licenseId !== undefined) data.licenseId = updates.licenseId;
   if (updates.storageBackendId !== undefined) data.storageBackendId = updates.storageBackendId;
   if (updates.fixedMasterDeviceId !== undefined) data.fixedMasterDeviceId = updates.fixedMasterDeviceId;
