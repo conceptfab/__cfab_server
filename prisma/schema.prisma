@@ -177,6 +177,17 @@ model AsyncDeltaPackage {
   @@map("async_delta_packages")
 }
 
+model AsyncDeltaDelivery {
+  id         String   @id @default(cuid())
+  packageId  String   @map("package_id")
+  deviceId   String   @map("device_id")
+  ackedAt    DateTime @default(now()) @map("acked_at")
+
+  @@unique([packageId, deviceId], map: "async_delivery_pkg_device_uq")
+  @@index([packageId], map: "async_delivery_pkg_idx")
+  @@map("async_delta_deliveries")
+}
+
 // ---------------------------------------------------------------------------
 // Licensing (migrated from data/license-store.json)
 // Cross-references (groupId/licenseId) are loose string IDs — referential
