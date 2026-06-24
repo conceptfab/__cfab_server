@@ -16,6 +16,7 @@ export interface StorageCredentials {
 
 export type SyncSessionStatus =
   | "awaiting_peer"
+  | "no_peer"
   | "negotiating"
   | "in_progress"
   | "completed"
