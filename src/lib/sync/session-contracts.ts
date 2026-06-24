@@ -16,6 +16,7 @@ export interface StorageCredentials {
 
 export type SyncSessionStatus =
   | "awaiting_peer"
+  // "no_peer" is a session/create RESPONSE status only — it is never persisted as a SyncSession row.
   | "no_peer"
   | "negotiating"
   | "in_progress"

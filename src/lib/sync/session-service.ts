@@ -133,6 +133,9 @@ export async function handleSessionCreate(
   // OTHER device in the license group is online (last 5 min). Mirrors the
   // presence pattern in direct-sync.ts. Prevents a solo device from parking a
   // master session that waits the full TTL for a peer that will never join.
+  // Note: touchDeviceLastSeen / isPeerPresent read the FS-backed license store,
+  // not the Prisma transaction below — a small TOCTOU window exists, but the
+  // 5-minute freshness window makes it inconsequential (worst case: one skipped cycle).
   await touchDeviceLastSeen(body.deviceId).catch(() => {});
   const requestingDevice = await getDevice(body.deviceId);
   const peerDevices = requestingDevice
@@ -150,10 +153,12 @@ export async function handleSessionCreate(
   );
 
   if (result.role === "no_peer") {
-    log("info", "session-service.no-peer", { deviceId: body.deviceId });
+    log("info", "session-service.no-peer", { userId, deviceId: body.deviceId });
     return {
       ok: true,
       sessionId: "",
+      // role is "master" by convention (no session was created); the client must
+      // branch on `status === "no_peer"` first — NOT on role — to skip the sync.
       role: "master",
       status: "no_peer",
       peerDeviceId: null,

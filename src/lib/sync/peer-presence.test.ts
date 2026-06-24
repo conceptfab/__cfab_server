@@ -10,9 +10,11 @@ describe("isPeerPresent", () => {
     expect(isPeerPresent(devices, "A", NOW)).toBe(false);
   });
 
-  it("ignores the requesting device's own freshness", () => {
-    const devices = [{ deviceId: "A", lastSeenAt: new Date(NOW).toISOString() }];
-    expect(isPeerPresent(devices, "A", NOW)).toBe(false);
+  it("respects a custom windowMs override", () => {
+    // Peer fresh within the default 5-min window, but stale within a 1s window.
+    const devices = [{ deviceId: "B", lastSeenAt: new Date(NOW - 2000).toISOString() }];
+    expect(isPeerPresent(devices, "A", NOW)).toBe(true);          // default window
+    expect(isPeerPresent(devices, "A", NOW, 1000)).toBe(false);   // 1s window → stale
   });
 
   it("false when the other device is stale", () => {
