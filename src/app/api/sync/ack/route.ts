@@ -1,15 +1,23 @@
 export const runtime = "nodejs";
 
+import { NextResponse } from "next/server";
 import { handleSyncOptions, handleSyncPost } from "@/lib/sync/http";
 import { handleAck } from "@/lib/sync/direct-sync";
 import type { AckBody, AckResponse } from "@/lib/sync/direct-sync";
 import { badRequest } from "@/lib/http/error";
+import { isLegacyDirectSyncEnabled } from "@/lib/sync/legacy-gate";
 
 export async function OPTIONS(request: Request) {
   return handleSyncOptions(request);
 }
 
 export async function POST(request: Request) {
+  if (!isLegacyDirectSyncEnabled()) {
+    return NextResponse.json(
+      { ok: false, error: "legacy_direct_sync_disabled" },
+      { status: 410, headers: { "cache-control": "no-store" } },
+    );
+  }
   return handleSyncPost<AckBody, AckResponse>(request, {
     route: "direct-ack",
     parseBody: (raw: unknown) => {
