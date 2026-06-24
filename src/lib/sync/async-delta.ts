@@ -93,11 +93,12 @@ export async function handleAsyncPush(
       {
         host: connInfo.host,
         port: connInfo.port,
-        protocol: connInfo.protocol as "sftp",
+        protocol: connInfo.protocol as "sftp" | "ftp",
         username: connInfo.username,
         password: connInfo.password,
         uploadPath: connInfo.uploadPath,
         downloadPath: connInfo.downloadPath,
+        secure: connInfo.secure,
       },
       packageId,
     );
@@ -299,11 +300,12 @@ export async function handleAsyncCredentials(
       {
         host: connInfo.host,
         port: connInfo.port,
-        protocol: connInfo.protocol as "sftp",
+        protocol: connInfo.protocol as "sftp" | "ftp",
         username: connInfo.username,
         password: connInfo.password,
         uploadPath: connInfo.uploadPath,
         downloadPath: connInfo.downloadPath,
+        secure: connInfo.secure,
       },
       packageId,
     );

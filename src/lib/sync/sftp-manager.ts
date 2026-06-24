@@ -50,7 +50,7 @@ export interface StorageFullTestResult {
 }
 
 export interface StorageConnectionInfo {
-  protocol: "sftp" | "s3";
+  protocol: "sftp" | "ftp" | "s3";
   host: string;
   port: number;
   username: string;
@@ -58,6 +58,8 @@ export interface StorageConnectionInfo {
   basePath: string;
   uploadPath: string;
   downloadPath: string;
+  /** FTP: czy używać explicit FTPS (AUTH TLS). Inne protokoły: undefined. */
+  secure?: boolean;
 }
 
 // --- SFTP adapter ---
@@ -509,7 +511,7 @@ function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
     getConnectionInfo(sessionId: string): StorageConnectionInfo {
       const sessionPath = `${config.basePath}${sessionId}`;
       return {
-        protocol: "sftp",
+        protocol: "ftp",
         host: config.host,
         port: config.port,
         username: config.username,
@@ -517,6 +519,7 @@ function createFtpAdapter(config: FtpStorageBackend): StorageAdapter {
         basePath: config.basePath,
         uploadPath: `${sessionPath}/slave-upload/`,
         downloadPath: `${sessionPath}/master-merged/`,
+        secure: config.secure,
       };
     },
 

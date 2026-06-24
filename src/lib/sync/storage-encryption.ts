@@ -11,11 +11,12 @@ import { getEnv } from "@/lib/config/env";
 export interface SftpCredentialsPayload {
   host: string;
   port: number;
-  protocol: "sftp";
+  protocol: "sftp" | "ftp";
   username: string;
   password: string;
   uploadPath: string;
   downloadPath: string;
+  secure?: boolean; // FTP: czy FTPS (AUTH TLS). SFTP: undefined.
   fileEncryptionKey: string; // base64 key for encrypting files on storage
 }
 
