@@ -198,17 +198,9 @@ export async function handleAsyncAck(
     deliveredToDeviceId: deviceId,
   });
 
-  // Clean up storage directory
-  try {
-    const { adapter } = await resolveAdapterForGroup(pkg.groupId);
-    await adapter.deleteSessionDir(`async/${packageId}`);
-  } catch (err) {
-    log("error", "async-delta.ack.cleanup-failed", {
-      packageId,
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-
+  // Plik na FTP to dane KLIENTA (E2E) — serwer ich NIE dotyka. Odbiorca kasuje
+  // plik sam po udanym imporcie (delete_file) ZANIM wyśle ack; serwer aktualizuje
+  // tylko status paczki w DB.
   log("info", "async-delta.ack", { packageId, deviceId });
 
   return { ok: true, acknowledged: true };
@@ -242,17 +234,8 @@ export async function handleAsyncReject(
 
   await updateAsyncPackageStatus(packageId, "rejected");
 
-  // Clean up storage
-  try {
-    const { adapter } = await resolveAdapterForGroup(pkg.groupId);
-    await adapter.deleteSessionDir(`async/${packageId}`);
-  } catch (err) {
-    log("error", "async-delta.reject.cleanup-failed", {
-      packageId,
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-
+  // Serwer nie dotyka danych na FTP klienta (E2E) — przy reject plik zostaje na
+  // FTP do decyzji klienta. Aktualizujemy tylko status paczki w DB.
   log("info", "async-delta.reject", { packageId, deviceId, reason });
 
   return { ok: true, rejected: true };

@@ -5,7 +5,6 @@ import {
   getActiveSessionIds,
   expireAsyncPackages,
   cleanupOldAsyncPackages,
-  getCleanableAsyncPackageIds,
 } from "./session-store";
 import { deleteSessionDir, listSessionDirs } from "./sftp-manager";
 import { log } from "@/lib/observability/logger";
@@ -53,6 +52,9 @@ export async function runSessionCleanup(): Promise<SessionCleanupResult> {
     const activeIds = await getActiveSessionIds();
     const activeSet = new Set(activeIds);
     for (const dir of sftpDirs) {
+      // Paczki async to dane KLIENTA na jego FTP (E2E) — serwer ich NIE dotyka.
+      // Kasuje je odbiorca po imporcie; orphan-net musi pomijać prefiks „async".
+      if (dir === "async" || dir.startsWith("async/")) continue;
       if (!activeSet.has(dir)) {
         try {
           await deleteSessionDir(dir);
@@ -68,19 +70,9 @@ export async function runSessionCleanup(): Promise<SessionCleanupResult> {
     // SFTP may not be configured — ignore
   }
 
-  // 6. Expire and cleanup async delta packages
+  // 6. Async delta: serwer czyści TYLKO metadane (DB). Plików na FTP NIE dotyka —
+  //    to dane klienta (E2E), kasowane przez odbiorcę po imporcie (delete_file).
   const asyncExpired = await expireAsyncPackages();
-  const cleanableAsync = await getCleanableAsyncPackageIds();
-  for (const { id } of cleanableAsync) {
-    try {
-      await deleteSessionDir(`async/${id}`);
-    } catch (err) {
-      log("error", "session-cleanup.async-delete-failed", {
-        packageId: id,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
   const asyncRemoved = await cleanupOldAsyncPackages(MAX_SESSION_AGE_MS);
 
   if (expired > 0 || removed > 0 || asyncExpired > 0 || asyncRemoved > 0) {
