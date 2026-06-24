@@ -32,9 +32,14 @@ vi.mock("../session-store", () => ({
         !state.deliveries.some((d) => d.packageId === p.id && d.deviceId === deviceId),
     ),
   ),
-  recordAsyncDelivery: vi.fn(async (packageId: string, deviceId: string) =>
-    state.deliveries.push({ packageId, deviceId }),
-  ),
+  recordAsyncDelivery: vi.fn(async (packageId: string, deviceId: string) => {
+    const alreadyPresent = state.deliveries.some(
+      (d) => d.packageId === packageId && d.deviceId === deviceId,
+    );
+    if (!alreadyPresent) {
+      state.deliveries.push({ packageId, deviceId });
+    }
+  }),
   getAckedDeviceIds: vi.fn(async (packageId: string) =>
     state.deliveries.filter((d) => d.packageId === packageId).map((d) => d.deviceId),
   ),
@@ -46,7 +51,7 @@ vi.mock("../session-store", () => ({
   }),
 }));
 
-import { handleAsyncPending } from "../async-delta";
+import { handleAsyncPending, handleAsyncAck } from "../async-delta";
 
 function pkg(id: string, from: string) {
   return {
@@ -82,5 +87,27 @@ describe("async-delta pending filter", () => {
     state.deliveries.push({ packageId: "p1", deviceId: "devB" });
     const res = await handleAsyncPending("owner1", "devB", "G1");
     expect(res.packages.map((p: any) => p.id)).toEqual([]);
+  });
+});
+
+describe("async-delta ack (multi-receiver)", () => {
+  it("keeps package pending until all active recipients (except sender) ack", async () => {
+    state.activeDevices = ["devA", "devB", "devC"]; // sender devA, recipients B,C
+    state.packages.push(pkg("p1", "devA"));
+
+    let r = await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
+    expect(r.acknowledged).toBe(true);
+    expect(state.packages[0].status).toBe("pending"); // C not yet acked
+
+    r = await handleAsyncAck("owner1", { deviceId: "devC", packageId: "p1" } as any);
+    expect(state.packages[0].status).toBe("delivered"); // all acked
+  });
+
+  it("ack is idempotent for the same device", async () => {
+    state.activeDevices = ["devA", "devB"];
+    state.packages.push(pkg("p1", "devA"));
+    await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
+    await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
+    expect(state.packages[0].status).toBe("delivered");
   });
 });

@@ -15,6 +15,9 @@ import {
   getPendingPackagesForGroup,
   getAsyncPackage,
   updateAsyncPackageStatus,
+  recordAsyncDelivery,
+  getAckedDeviceIds,
+  getActiveDeviceIdsForGroup,
 } from "./session-store";
 import { getStorageBackend, getAllGroups } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
@@ -193,15 +196,27 @@ export async function handleAsyncAck(
     return { ok: true, acknowledged: false };
   }
 
-  // Mark as delivered
-  await updateAsyncPackageStatus(packageId, "delivered", {
-    deliveredToDeviceId: deviceId,
-  });
+  // Multi-receiver: zapisz potwierdzenie tego urządzenia. Paczka → delivered
+  // dopiero gdy WSZYSTKIE aktywne urządzenia grupy (poza nadawcą) potwierdziły.
+  await recordAsyncDelivery(packageId, deviceId);
 
-  // Plik na FTP to dane KLIENTA (E2E) — serwer ich NIE dotyka. Odbiorca kasuje
-  // plik sam po udanym imporcie (delete_file) ZANIM wyśle ack; serwer aktualizuje
-  // tylko status paczki w DB.
-  log("info", "async-delta.ack", { packageId, deviceId });
+  const acked = new Set(await getAckedDeviceIds(packageId));
+  const active = await getActiveDeviceIdsForGroup(pkg.groupId);
+  const expectedRecipients = active.filter((d) => d !== pkg.fromDeviceId);
+  const allAcked =
+    expectedRecipients.length > 0 && expectedRecipients.every((d) => acked.has(d));
+
+  if (allAcked) {
+    await updateAsyncPackageStatus(packageId, "delivered", { deliveredToDeviceId: deviceId });
+  }
+
+  log("info", "async-delta.ack", {
+    packageId,
+    deviceId,
+    ackedCount: acked.size,
+    expectedRecipients: expectedRecipients.length,
+    delivered: allAcked,
+  });
 
   return { ok: true, acknowledged: true };
 }
