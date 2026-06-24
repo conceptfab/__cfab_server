@@ -185,7 +185,8 @@ export async function findAndJoinOrCreate(
   deviceId: string,
   markerHash: string | null,
   tableHashes: TableHashes | null,
-): Promise<{ session: SyncSession; role: "master" | "slave" }> {
+  peerPresent: boolean,
+): Promise<{ session: SyncSession; role: "master" | "slave" } | { session: null; role: "no_peer" }> {
   // Use a transaction for atomicity
   return prisma.$transaction(async (tx) => {
     // Find existing awaiting session for this user (different device)
@@ -227,6 +228,12 @@ export async function findAndJoinOrCreate(
         },
       });
       return { session: dbToSession(row), role: "slave" as const };
+    }
+
+    // No awaiting session to join. Only create a master session if a peer is
+    // actually online — otherwise a solo device would park here for the whole TTL.
+    if (!peerPresent) {
+      return { session: null, role: "no_peer" as const };
     }
 
     // Create new session as master
