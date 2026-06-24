@@ -9,6 +9,7 @@ import type {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
+import { log } from "@/lib/observability/logger";
 import type {
   ClientGroup,
   DeviceRegistration,
@@ -279,8 +280,12 @@ export async function findLicenseByKey(licenseKey: string): Promise<License | nu
 }
 
 export async function getGroupForLicense(licenseId: string): Promise<ClientGroup | null> {
-  const row = await prisma.group.findFirst({ where: { licenseId } });
-  return row ? mapGroup(row) : null;
+  const rows = await prisma.group.findMany({ where: { licenseId }, orderBy: { id: "asc" } });
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    log("error", "license.multiple_groups_for_license", { licenseId, count: rows.length });
+  }
+  return mapGroup(rows[0]);
 }
 
 // ---------------------------------------------------------------------------

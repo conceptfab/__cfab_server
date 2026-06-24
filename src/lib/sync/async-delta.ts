@@ -168,6 +168,14 @@ export async function handleAsyncPending(
 
   const packages = await getPendingPackagesForGroup(groupId, deviceId);
 
+  const activeForLog = await getActiveDeviceIdsForGroup(groupId);
+  log("info", "async-delta.pending", {
+    groupId,
+    deviceId,
+    pendingCount: packages.length,
+    activeDevices: activeForLog.length,
+  });
+
   return { ok: true, packages };
 }
 
