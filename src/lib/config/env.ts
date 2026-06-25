@@ -1,5 +1,3 @@
-import { log } from "@/lib/observability/logger";
-
 type AuthMode = "token" | "session";
 type EncryptionMode = "none" | "server" | "e2e";
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -185,7 +183,12 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     config.syncAllowedOrigins.length === 1 &&
     config.syncAllowedOrigins[0] === "*"
   ) {
-    log("warn", "cors.wildcard_in_prod", {});
+    // MUST use console.warn directly, NOT the structured logger: log() calls
+    // getEnv() → buildEnv(), and emitting from inside buildEnv() (before
+    // cachedEnv is assigned) caused infinite recursion (RangeError: Maximum
+    // call stack size exceeded) on every request in production whenever
+    // SYNC_ALLOWED_ORIGINS="*". Keep env.ts free of the logger dependency.
+    console.warn('{"level":"warn","event":"cors.wildcard_in_prod"}');
   }
 
   if (config.syncEncryptionKey && config.syncEncryptionKey.length < 32) {
