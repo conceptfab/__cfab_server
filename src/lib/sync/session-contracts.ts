@@ -88,6 +88,7 @@ export type AsyncPackageStatus =
   | "pending"       // uploaded, waiting for peer to pull
   | "delivered"     // peer downloaded + acked
   | "rejected"      // peer rejected (base marker mismatch)
+  | "superseded"    // nadawca wypchnął nowszą pełną bazę → ta paczka jest zbędna
   | "expired";      // TTL exceeded
 
 export interface AsyncDeltaPackage {

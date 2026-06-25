@@ -653,7 +653,7 @@ export async function cleanupOldAsyncPackages(maxAgeMs: number): Promise<number>
   const cutoff = new Date(Date.now() - maxAgeMs);
   const result = await prisma.asyncDeltaPackage.deleteMany({
     where: {
-      status: { in: ["delivered", "rejected", "expired"] },
+      status: { in: ["delivered", "rejected", "expired", "superseded"] },
       createdAt: { lt: cutoff },
     },
   });
@@ -700,7 +700,7 @@ export async function getActiveDeviceIdsForGroup(groupId: string): Promise<strin
   return rows.map((r) => r.deviceId);
 }
 
-/** Paczki wysłane przez to urządzenie, które można już skasować z FTP (delivered/expired). */
+/** Paczki wysłane przez to urządzenie, które można już skasować z FTP (delivered/expired/superseded). */
 export async function getSenderCleanablePackages(
   groupId: string,
   deviceId: string,
@@ -709,12 +709,29 @@ export async function getSenderCleanablePackages(
     where: {
       groupId,
       fromDeviceId: deviceId,
-      status: { in: ["delivered", "expired"] },
+      status: { in: ["delivered", "expired", "superseded"] },
       storagePath: { not: "" },
     },
     select: { id: true, storagePath: true },
   });
   return rows.map((r) => ({ packageId: r.id, storagePath: r.storagePath }));
+}
+
+/**
+ * Oznacza wszystkie PENDING paczki danego urządzenia w grupie jako `superseded`.
+ * Wołane przy nowym push: pełny eksport (build_full_export) zawiera całą historię,
+ * więc poprzednie własne paczki są zbędne — stają się sender-cleanable od razu,
+ * bez czekania na 72h TTL ani na ACK drugiej maszyny. Zwraca liczbę unieważnionych.
+ */
+export async function supersedeOwnPendingPackages(
+  groupId: string,
+  deviceId: string,
+): Promise<number> {
+  const result = await prisma.asyncDeltaPackage.updateMany({
+    where: { groupId, fromDeviceId: deviceId, status: "pending" },
+    data: { status: "superseded" },
+  });
+  return result.count;
 }
 
 // ---------------------------------------------------------------------------

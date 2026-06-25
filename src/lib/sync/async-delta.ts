@@ -19,6 +19,7 @@ import {
   getAckedDeviceIds,
   getActiveDeviceIdsForGroup,
   getSenderCleanablePackages,
+  supersedeOwnPendingPackages,
 } from "./session-store";
 import { getStorageBackend, getAllGroups } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
@@ -78,6 +79,15 @@ export async function handleAsyncPush(
     throw new Error(
       "There are pending packages for your group. Pull and apply them first before pushing.",
     );
+  }
+
+  // Nowy push = pełny eksport całej bazy (build_full_export). Poprzednie WŁASNE
+  // paczki pending tego urządzenia są więc zbędne — unieważniamy je (superseded),
+  // by klient skasował ich pliki z FTP od razu, bez czekania 72h na TTL ani na ACK
+  // drugiej maszyny. To zamyka spam delta.enc na FTP przy braku odbiorcy.
+  const supersededCount = await supersedeOwnPendingPackages(groupId, deviceId);
+  if (supersededCount > 0) {
+    log("info", "async-delta.supersede", { groupId, deviceId, supersededCount });
   }
 
   // Resolve storage
@@ -293,7 +303,9 @@ export async function handleAsyncCredentials(
 
   const isOwnerCleanup =
     pkg.fromDeviceId === deviceId &&
-    (pkg.status === "delivered" || pkg.status === "expired");
+    (pkg.status === "delivered" ||
+      pkg.status === "expired" ||
+      pkg.status === "superseded");
   if (pkg.status !== "pending" && !isOwnerCleanup) {
     throw new Error(`Package ${packageId} is not pending (status: ${pkg.status})`);
   }

@@ -52,8 +52,18 @@ vi.mock("../session-store", () => ({
   getSenderCleanablePackages: vi.fn(async (groupId: string, deviceId: string) =>
     state.packages
       .filter((p) => p.groupId === groupId && p.fromDeviceId === deviceId &&
-        (p.status === "delivered" || p.status === "expired"))
+        (p.status === "delivered" || p.status === "expired" || p.status === "superseded"))
       .map((p) => ({ packageId: p.id, storagePath: p.storagePath }))),
+  supersedeOwnPendingPackages: vi.fn(async (groupId: string, deviceId: string) => {
+    let count = 0;
+    for (const p of state.packages) {
+      if (p.groupId === groupId && p.fromDeviceId === deviceId && p.status === "pending") {
+        p.status = "superseded";
+        count++;
+      }
+    }
+    return count;
+  }),
 }));
 
 import { handleAsyncPending, handleAsyncAck, handleAsyncSentCleanup } from "../async-delta";
@@ -118,11 +128,26 @@ describe("async-delta ack (multi-receiver)", () => {
 });
 
 describe("async-delta sent-cleanup", () => {
-  it("lists sender's own delivered/expired packages only", async () => {
+  it("lists sender's own delivered/expired/superseded packages only", async () => {
     state.packages.push({ ...pkg("p1", "devA"), status: "delivered", storagePath: "/async/p1" });
     state.packages.push({ ...pkg("p2", "devA"), status: "pending", storagePath: "/async/p2" });
     state.packages.push({ ...pkg("p3", "devB"), status: "expired", storagePath: "/async/p3" });
+    state.packages.push({ ...pkg("p4", "devA"), status: "superseded", storagePath: "/async/p4" });
     const res = await handleAsyncSentCleanup("owner1", "devA", "G1");
-    expect(res.packages.map((p: any) => p.packageId).sort()).toEqual(["p1"]);
+    // p1 (delivered) + p4 (superseded) — własne; p2 wciąż pending, p3 cudze.
+    expect(res.packages.map((p) => p.packageId).sort()).toEqual(["p1", "p4"]);
+  });
+
+  it("superseded own pending packages become cleanable (no FTP spam without a 2nd device)", async () => {
+    const { supersedeOwnPendingPackages } = await import("../session-store");
+    // Dwie własne paczki pending — jak po dwóch pushach bez odbiorcy.
+    state.packages.push({ ...pkg("p1", "devA"), status: "pending", storagePath: "/async/p1" });
+    state.packages.push({ ...pkg("p2", "devA"), status: "pending", storagePath: "/async/p2" });
+    // Nowy push unieważnia poprzednie własne pending.
+    const count = await supersedeOwnPendingPackages("G1", "devA");
+    expect(count).toBe(2);
+    // Teraz obie są sender-cleanable → klient skasuje je z FTP od razu.
+    const res = await handleAsyncSentCleanup("owner1", "devA", "G1");
+    expect(res.packages.map((p) => p.packageId).sort()).toEqual(["p1", "p2"]);
   });
 });
