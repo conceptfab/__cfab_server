@@ -28,6 +28,11 @@ export interface AppEnv {
   sftpMaxFileSizeMb: number;
   syncEncryptionKey: string | null;
   adminApiToken: string | null;
+  dashboardSessionSecret: string | null;
+  kvRestApiUrl: string | null;
+  kvRestApiToken: string | null;
+  rateLimitFailureMode: "fail-open" | "fail-closed";
+  syncAllowE2eV2: boolean;
 }
 
 let cachedEnv: AppEnv | null = null;
@@ -176,6 +181,18 @@ function buildEnv(env: NodeJS.ProcessEnv): AppEnv {
     sftpMaxFileSizeMb: parseIntEnv(env.SFTP_MAX_FILE_SIZE_MB, 100, "SFTP_MAX_FILE_SIZE_MB"),
     syncEncryptionKey: env.SYNC_ENCRYPTION_KEY?.trim() || null,
     adminApiToken: env.ADMIN_API_TOKEN?.trim() || null,
+    dashboardSessionSecret: env.DASHBOARD_SESSION_SECRET?.trim() || null,
+    kvRestApiUrl: env.KV_REST_API_URL?.trim() || env.UPSTASH_REDIS_REST_URL?.trim() || null,
+    kvRestApiToken: env.KV_REST_API_TOKEN?.trim() || env.UPSTASH_REDIS_REST_TOKEN?.trim() || null,
+    rateLimitFailureMode: parseEnumEnv<"fail-open" | "fail-closed">(
+      env.RATE_LIMIT_FAILURE_MODE,
+      "fail-open",
+      ["fail-open", "fail-closed"],
+      "RATE_LIMIT_FAILURE_MODE",
+    ),
+    // E2E v2 (passphrase) acceptance. Default false: v2 pushes are rejected until
+    // a group's fleet is migrated (prevents v1 pullers failing on v2 packages).
+    syncAllowE2eV2: parseBoolEnv(env.SYNC_ALLOW_E2E_V2, false),
   };
 
   if (

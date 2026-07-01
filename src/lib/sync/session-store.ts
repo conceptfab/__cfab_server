@@ -106,6 +106,8 @@ function dbToAsyncPackage(row: any): AsyncDeltaPackage {
     expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
     deliveredAt: row.deliveredAt instanceof Date ? row.deliveredAt.toISOString() : row.deliveredAt,
     deliveredToDeviceId: row.deliveredToDeviceId,
+    keyScheme: (row.keyScheme ?? "v1-groupid") as AsyncDeltaPackage["keyScheme"],
+    keySalt: row.keySalt ?? null,
   };
 }
 
@@ -581,6 +583,8 @@ export async function createAsyncPackage(
       expiresAt: new Date(pkg.expiresAt),
       deliveredAt: pkg.deliveredAt ? new Date(pkg.deliveredAt) : null,
       deliveredToDeviceId: pkg.deliveredToDeviceId,
+      keyScheme: pkg.keyScheme,
+      keySalt: pkg.keySalt,
     },
   });
 }

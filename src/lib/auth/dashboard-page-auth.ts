@@ -1,14 +1,20 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { getEnv } from "@/lib/config/env";
 
 export const SYNC_DASHBOARD_AUTH_COOKIE = "timeflow_sync_dashboard_auth";
 export const LEGACY_SYNC_DASHBOARD_AUTH_COOKIE = "cfab_sync_dashboard_auth";
-const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+/** #7: short-lived dashboard session (was 7 days storing the raw API token). */
+const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 interface DashboardAuthCookiePayload {
   userId: string;
   token: string;
+}
+
+interface DashboardSessionPayload {
+  userId: string;
+  exp: number; // epoch ms
 }
 
 function safeStringEqual(left: string, right: string): boolean {
@@ -45,10 +51,6 @@ function normalizeTokenInput(value: unknown): string | null {
   return token.length > 0 ? token : null;
 }
 
-function encodePayload(payload: DashboardAuthCookiePayload): string {
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
 function decodePayload(rawCookieValue: string): DashboardAuthCookiePayload | null {
   try {
     const json = Buffer.from(rawCookieValue, "base64url").toString("utf8");
@@ -76,15 +78,72 @@ export function getDashboardAuthCookieOptions() {
     secure: env.isProduction,
     sameSite: "lax" as const,
     path: "/",
-    maxAge: SEVEN_DAYS_SECONDS,
+    maxAge: SESSION_TTL_SECONDS,
   };
 }
 
-export function buildDashboardAuthCookieValue(userId: string, token: string): string {
-  return encodePayload({
+// ---------------------------------------------------------------------------
+// #7: signed short-lived session cookie (no raw API token stored client-side).
+// Format: `<base64url(payload)>.<base64url(hmac)>`. Legacy v1 cookies (a single
+// base64url blob with {userId, token}, no dot) are still accepted until they
+// expire, but new logins never mint them.
+// ---------------------------------------------------------------------------
+
+function getSessionSigningKey(): string | null {
+  const env = getEnv();
+  return env.dashboardSessionSecret ?? env.adminApiToken ?? env.syncApiTokenSecret;
+}
+
+function sign(payloadB64: string, key: string): string {
+  return createHmac("sha256", key).update(payloadB64).digest("base64url");
+}
+
+function verifySignature(payloadB64: string, signatureB64: string, key: string): boolean {
+  const expected = sign(payloadB64, key);
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(signatureB64, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/** Builds a signed, short-lived session cookie value for the given user. */
+export function buildDashboardSessionCookieValue(userId: string): string {
+  const key = getSessionSigningKey();
+  if (!key) {
+    throw new Error(
+      "Dashboard session signing key missing (set DASHBOARD_SESSION_SECRET or ADMIN_API_TOKEN)",
+    );
+  }
+  const payload: DashboardSessionPayload = {
     userId: userId.trim(),
-    token: normalizeTokenInput(token) ?? token.trim(),
-  });
+    exp: Date.now() + SESSION_TTL_SECONDS * 1000,
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${payloadB64}.${sign(payloadB64, key)}`;
+}
+
+function verifySignedSession(rawCookieValue: string): string | null {
+  const dot = rawCookieValue.indexOf(".");
+  if (dot < 0) return null; // not a signed-session cookie (maybe legacy v1)
+  const key = getSessionSigningKey();
+  if (!key) return null;
+
+  const payloadB64 = rawCookieValue.slice(0, dot);
+  const signatureB64 = rawCookieValue.slice(dot + 1);
+  if (!verifySignature(payloadB64, signatureB64, key)) return null;
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(payloadB64, "base64url").toString("utf8"),
+    ) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const userId = normalizeNonEmptyString((parsed as { userId?: unknown }).userId);
+    const exp = (parsed as { exp?: unknown }).exp;
+    if (!userId || typeof exp !== "number" || Date.now() >= exp) return null;
+    return userId;
+  } catch {
+    return null;
+  }
 }
 
 export function clearDashboardAuthCookieValue() {
@@ -122,6 +181,13 @@ export function validateDashboardCredentials(
 
 export function getDashboardUserIdFromCookie(rawCookieValue: string | undefined): string | null {
   if (!rawCookieValue) return null;
+
+  // Preferred: signed short-lived session (#7).
+  const signedUserId = verifySignedSession(rawCookieValue);
+  if (signedUserId) return signedUserId;
+
+  // Legacy v1 fallback: base64url({userId, token}) validated against env token.
+  // Accepted only until existing cookies expire; new logins mint signed sessions.
   const payload = decodePayload(rawCookieValue);
   if (!payload) return null;
 

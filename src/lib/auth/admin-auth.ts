@@ -1,6 +1,6 @@
 // src/lib/auth/admin-auth.ts
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 import { getEnv } from "@/lib/config/env";
 import { forbidden, unauthorized } from "@/lib/http/error";
@@ -9,6 +9,13 @@ import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
   getDashboardUserIdFromCookie,
 } from "@/lib/auth/dashboard-page-auth";
+
+/** Constant-time equality independent of input length (hash to fixed 32 bytes first). */
+function constantTimeEqual(a: string, b: string): boolean {
+  const da = createHash("sha256").update(a, "utf8").digest();
+  const db = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(da, db);
+}
 
 function parseCookieHeader(cookieHeader: string): Map<string, string> {
   const map = new Map<string, string>();
@@ -34,14 +41,7 @@ export function authenticateAdminRequest(request: Request): void {
 
     const token = authHeader.substring(7);
 
-    if (token.length !== env.adminApiToken.length) {
-      throw unauthorized("Invalid admin token", "invalid_admin_token");
-    }
-
-    const tokenBuf = Buffer.from(token, "utf8");
-    const expectedBuf = Buffer.from(env.adminApiToken, "utf8");
-
-    if (!timingSafeEqual(tokenBuf, expectedBuf)) {
+    if (!constantTimeEqual(token, env.adminApiToken)) {
       throw unauthorized("Invalid admin token", "invalid_admin_token");
     }
     return; // Bearer auth OK

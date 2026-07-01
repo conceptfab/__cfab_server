@@ -32,6 +32,8 @@ export async function POST(request: Request) {
         baseMarkerHash: typeof body.baseMarkerHash === "string" ? body.baseMarkerHash : null,
         newMarkerHash: body.newMarkerHash,
         fileSizeBytes: body.fileSizeBytes,
+        keyScheme: typeof body.keyScheme === "string" ? (body.keyScheme as AsyncPushBody["keyScheme"]) : undefined,
+        keySalt: typeof body.keySalt === "string" ? body.keySalt : null,
       };
     },
     getBodyUserId: () => null,

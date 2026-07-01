@@ -1,5 +1,5 @@
 import type { TableHashes } from "@/lib/sync/contracts";
-import type { EncryptedCredentials } from "./storage-encryption";
+import type { EncryptedCredentials, E2eKeyScheme } from "./storage-encryption";
 
 // ---------------------------------------------------------------------------
 // Storage credentials (encrypted SFTP creds for clients)
@@ -106,6 +106,10 @@ export interface AsyncDeltaPackage {
   expiresAt: string;
   deliveredAt: string | null;
   deliveredToDeviceId: string | null;
+  /** E2E key scheme this package was encrypted under (default v1). */
+  keyScheme: E2eKeyScheme;
+  /** base64 KDF salt for v2-passphrase; null for v1. */
+  keySalt: string | null;
 }
 
 export interface AsyncPushBody {
@@ -114,6 +118,10 @@ export interface AsyncPushBody {
   baseMarkerHash: string | null;
   newMarkerHash: string;
   fileSizeBytes: number;
+  /** Optional: E2E scheme declared by the client. Defaults to "v1-groupid". */
+  keyScheme?: E2eKeyScheme;
+  /** Optional: base64 KDF salt (required when keyScheme = "v2-passphrase"). */
+  keySalt?: string | null;
 }
 
 export interface AsyncPushResponse {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { authenticateSyncRequest } from "@/lib/auth/server-auth";
+import { authenticateSyncRequest, assertDeviceIdBinding } from "@/lib/auth/server-auth";
 import { getEnv } from "@/lib/config/env";
 import { internalServerError, isAppError, serviceUnavailable, tooManyRequests, type AppError } from "@/lib/http/error";
 import { getClientIp, parseJsonBody } from "@/lib/http/request";
@@ -103,10 +103,13 @@ function mapInfraError(error: unknown): AppError | null {
   const isInit = error.name === "PrismaClientInitializationError";
   const isSchemaOrConn = code.startsWith("P1") || code === "P2021" || code === "P2022";
   if (isInit || isSchemaOrConn) {
+    // Do NOT expose prismaCode to the client (#10). Log it server-side instead.
+    if (code) {
+      log("warn", "sync.infra_error", { prismaCode: code });
+    }
     return serviceUnavailable(
       "Sync database unavailable or schema not initialized (run `prisma migrate deploy`)",
       "database_unavailable",
-      code ? { prismaCode: code } : undefined,
     );
   }
   return null;
@@ -158,7 +161,11 @@ export async function handleSyncPost<TBody, TResponse>(
   let compressedBytes: number | undefined;
 
   try {
-    const parsed = await parseJsonBody(request, env.syncMaxPayloadBytes);
+    const parsed = await parseJsonBody(request, env.syncMaxPayloadBytes, {
+      maxArrayItems: env.syncMaxArrayItems,
+      maxObjectKeys: env.syncMaxObjectKeys,
+      maxDepth: env.syncMaxJsonDepth,
+    });
     rawBytes = parsed.rawBytes;
     compressedBytes = parsed.compressedBytes;
 
@@ -169,13 +176,16 @@ export async function handleSyncPost<TBody, TResponse>(
     const auth = await authenticateSyncRequest(request, bodyUserId);
     userIdForLogs = auth.userId;
 
+    // WS-B: bind body.deviceId to the device token identity (no-op for env-token).
+    assertDeviceIdBinding(auth, deviceIdForLogs);
+
     const rateLimitKey = [
       "sync",
       spec.route,
       auth.userId,
       clientIp ?? "unknown-ip",
     ].join(":");
-    const rate = checkRateLimit(
+    const rate = await checkRateLimit(
       rateLimitKey,
       env.syncRateLimitMaxRequests,
       env.syncRateLimitWindowMs,
@@ -272,7 +282,7 @@ export async function handleSyncGet<TResponse>(
       auth.userId,
       clientIp ?? "unknown-ip",
     ].join(":");
-    const rate = checkRateLimit(
+    const rate = await checkRateLimit(
       rateLimitKey,
       env.syncRateLimitMaxRequests,
       env.syncRateLimitWindowMs,

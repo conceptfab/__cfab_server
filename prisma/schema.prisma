@@ -127,6 +127,8 @@ model SyncSession {
   resultMarkerHash       String?  @map("result_marker_hash")
   completedAt            DateTime? @map("completed_at")
   errorMessage           String?  @map("error_message")
+  keyScheme              String   @default("v1-groupid") @map("key_scheme")
+  keySalt                String?  @map("key_salt")
 
   historyEntries SyncHistoryEntry[]
 
@@ -171,6 +173,8 @@ model AsyncDeltaPackage {
   expiresAt          DateTime @map("expires_at")
   deliveredAt        DateTime? @map("delivered_at")
   deliveredToDeviceId String? @map("delivered_to_device_id")
+  keyScheme          String   @default("v1-groupid") @map("key_scheme")
+  keySalt            String?  @map("key_salt")
 
   @@index([groupId, status], map: "async_packages_group_status_idx")
   @@index([status, expiresAt], map: "async_packages_status_expires_idx")
@@ -218,6 +222,9 @@ model Group {
   syncPriority          Json    @default("{}") @map("sync_priority")
   maxSyncFrequencyHours Float?  @map("max_sync_frequency_hours")
   maxDatabaseSizeMb     Int?    @map("max_database_size_mb")
+  // Opcja C (bring-your-own-storage): kredencjały storage zaszyfrowane po stronie
+  // KLIENTA. Serwer przechowuje wyłącznie szyfrogram i nie zna hasła storage.
+  clientEncryptedStorageConfig Json? @map("client_encrypted_storage_config")
 
   @@index([ownerId], map: "client_groups_owner_id_idx")
   @@index([licenseId], map: "client_groups_license_id_idx")

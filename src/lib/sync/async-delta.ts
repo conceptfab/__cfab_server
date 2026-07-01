@@ -24,7 +24,10 @@ import {
 import { getStorageBackend, getAllGroups } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
 import type { StorageAdapter } from "./sftp-manager";
-import { encryptCredentialsWithFileKey, deriveGroupKey } from "./storage-encryption";
+import { encryptCredentialsWithFileKey, deriveGroupKey, isE2eKeyScheme } from "./storage-encryption";
+import type { E2eKeyScheme } from "./storage-encryption";
+import { badRequest } from "@/lib/http/error";
+import { getEnv } from "@/lib/config/env";
 import { log } from "@/lib/observability/logger";
 
 const ASYNC_PACKAGE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
@@ -62,6 +65,28 @@ export async function handleAsyncPush(
   body: AsyncPushBody,
 ): Promise<AsyncPushResponse> {
   const { deviceId, groupId, baseMarkerHash, newMarkerHash, fileSizeBytes } = body;
+
+  // E2E key scheme negotiation (#1). Default v1; validate declared scheme.
+  const keyScheme: E2eKeyScheme = body.keyScheme ?? "v1-groupid";
+  if (body.keyScheme !== undefined && !isE2eKeyScheme(body.keyScheme)) {
+    throw badRequest(`Unsupported keyScheme: ${String(body.keyScheme)}`, "unsupported_key_scheme");
+  }
+  let keySalt: string | null = null;
+  if (keyScheme === "v2-passphrase") {
+    // Gated behind SYNC_ALLOW_E2E_V2 so v2 packages only appear once a group's
+    // fleet can decrypt them (prevents v1 pullers failing). Server crypto for
+    // creds is unchanged (v1); v2 only affects the client-held data key.
+    if (!getEnv().syncAllowE2eV2) {
+      throw badRequest(
+        "v2-passphrase E2E is not enabled on this server (set SYNC_ALLOW_E2E_V2 after fleet migration)",
+        "key_scheme_not_supported_yet",
+      );
+    }
+    if (typeof body.keySalt !== "string" || body.keySalt.trim().length === 0) {
+      throw badRequest("keySalt is required for keyScheme=v2-passphrase", "key_salt_required");
+    }
+    keySalt = body.keySalt;
+  }
 
   // Verify group exists and user has access
   const groups = await getAllGroups();
@@ -138,6 +163,8 @@ export async function handleAsyncPush(
     expiresAt: new Date(now.getTime() + ASYNC_PACKAGE_TTL_MS).toISOString(),
     deliveredAt: null,
     deliveredToDeviceId: null,
+    keyScheme,
+    keySalt,
   };
 
   await createAsyncPackage(pkg);

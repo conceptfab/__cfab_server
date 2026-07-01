@@ -882,17 +882,29 @@ async function handleDeltaPushInner(
     }
   }
 
-  // 5. Merge assignment_feedback by created_at (append new, no ID remapping needed server-side)
+  // 5. Merge assignment_feedback — dedup by a full identity key (prefer uuid/id;
+  //    fall back to natural fields + content hash) so distinct-but-simultaneous
+  //    records sharing a timestamp are NOT merged/dropped.
   if (delta.assignment_feedback && delta.assignment_feedback.length > 0) {
     if (!Array.isArray(data.assignment_feedback)) data.assignment_feedback = [];
     const existing = data.assignment_feedback as Record<string, unknown>[];
-    const existingKeys = new Set(
-      existing.map((r) => `${r.source}|${r.created_at}`),
-    );
+    const feedbackKey = (r: Record<string, unknown>): string =>
+      r.uuid != null
+        ? `uuid:${String(r.uuid)}`
+        : r.id != null
+          ? `id:${String(r.id)}`
+          : [
+              r.source ?? "",
+              r.created_at ?? "",
+              r.session_id ?? "",
+              r.project_id ?? "",
+              sha256(String(r.payload ?? r.message ?? "")),
+            ].join("|");
+    const existingKeys = new Set(existing.map(feedbackKey));
     for (const row of delta.assignment_feedback) {
       if (typeof row !== "object" || row === null) continue;
       const r = row as Record<string, unknown>;
-      const key = `${r.source}|${r.created_at}`;
+      const key = feedbackKey(r);
       if (!existingKeys.has(key)) {
         existing.push(r);
         existingKeys.add(key);
@@ -900,17 +912,27 @@ async function handleDeltaPushInner(
     }
   }
 
-  // 6. Merge assignment_auto_runs by started_at (append new)
+  // 6. Merge assignment_auto_runs — dedup by full identity key (prefer uuid/id).
   if (delta.assignment_auto_runs && delta.assignment_auto_runs.length > 0) {
     if (!Array.isArray(data.assignment_auto_runs)) data.assignment_auto_runs = [];
     const existing = data.assignment_auto_runs as Record<string, unknown>[];
-    const existingKeys = new Set(
-      existing.map((r) => String(r.started_at)),
-    );
+    const autoRunKey = (r: Record<string, unknown>): string =>
+      r.uuid != null
+        ? `uuid:${String(r.uuid)}`
+        : r.id != null
+          ? `id:${String(r.id)}`
+          : [
+              r.started_at ?? "",
+              r.project_id ?? "",
+              r.status ?? "",
+              r.finished_at ?? "",
+              sha256(String(r.details ?? "")),
+            ].join("|");
+    const existingKeys = new Set(existing.map(autoRunKey));
     for (const row of delta.assignment_auto_runs) {
       if (typeof row !== "object" || row === null) continue;
       const r = row as Record<string, unknown>;
-      const key = String(r.started_at);
+      const key = autoRunKey(r);
       if (!existingKeys.has(key)) {
         existing.push(r);
         existingKeys.add(key);

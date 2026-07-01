@@ -5,7 +5,7 @@
  * touches a real database or SFTP connection.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // In-memory store controlled by tests
 const state = {
@@ -66,7 +66,8 @@ vi.mock("../session-store", () => ({
   }),
 }));
 
-import { handleAsyncPending, handleAsyncAck, handleAsyncSentCleanup } from "../async-delta";
+import { handleAsyncPending, handleAsyncAck, handleAsyncSentCleanup, handleAsyncPush } from "../async-delta";
+import { resetEnvForTests } from "@/lib/config/env";
 
 function pkg(id: string, from: string) {
   return {
@@ -124,6 +125,44 @@ describe("async-delta ack (multi-receiver)", () => {
     await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
     await handleAsyncAck("owner1", { deviceId: "devB", packageId: "p1" } as any);
     expect(state.packages[0].status).toBe("delivered");
+  });
+});
+
+describe("async-delta v2 gate (SYNC_ALLOW_E2E_V2)", () => {
+  const v2Body = {
+    deviceId: "devA",
+    groupId: "G1",
+    baseMarkerHash: null,
+    newMarkerHash: "m1",
+    fileSizeBytes: 10,
+    keyScheme: "v2-passphrase" as const,
+    keySalt: "timeflow-online-sync-e2e-v2|G1",
+  };
+
+  beforeEach(() => resetEnvForTests());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetEnvForTests();
+  });
+
+  it("rejects v2 push when SYNC_ALLOW_E2E_V2 is off (default)", async () => {
+    vi.stubEnv("SYNC_ALLOW_E2E_V2", "false");
+    await expect(handleAsyncPush("owner1", v2Body)).rejects.toMatchObject({
+      code: "key_scheme_not_supported_yet",
+    });
+  });
+
+  it("rejects v2 push without keySalt even when enabled", async () => {
+    vi.stubEnv("SYNC_ALLOW_E2E_V2", "true");
+    await expect(
+      handleAsyncPush("owner1", { ...v2Body, keySalt: "" }),
+    ).rejects.toMatchObject({ code: "key_salt_required" });
+  });
+
+  it("rejects an unknown keyScheme", async () => {
+    await expect(
+      handleAsyncPush("owner1", { ...v2Body, keyScheme: "v9-bogus" as never }),
+    ).rejects.toMatchObject({ code: "unsupported_key_scheme" });
   });
 });
 

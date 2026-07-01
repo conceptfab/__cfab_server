@@ -35,7 +35,10 @@ interface UserLicenseContext {
   device: DeviceRegistration | null;
 }
 
-async function resolveLicenseContext(userId: string): Promise<UserLicenseContext | null> {
+async function resolveLicenseContext(
+  userId: string,
+  deviceId: string,
+): Promise<UserLicenseContext | null> {
   const groups = await getAllGroups();
   // NOTE: Currently assumes 1 user = 1 group. If multi-group support is added,
   // this needs to accept a groupId parameter or return all matching groups.
@@ -46,8 +49,9 @@ async function resolveLicenseContext(userId: string): Promise<UserLicenseContext
   const license = licenses.find((l) => l.id === group.licenseId);
   if (!license) return null;
 
-  // Device may not be registered yet (first sync)
-  const device: DeviceRegistration | null = null; // Looked up from store if needed
+  // Real device lookup so validateLicenseForSync can enforce maxSyncFrequencyHours.
+  // null on first sync (device not yet registered) — throttle simply won't trigger.
+  const device = await getDevice(deviceId);
   return { license, group, device };
 }
 
@@ -110,10 +114,11 @@ export async function handleSessionCreate(
   body: SessionCreateBody,
 ): Promise<SessionCreateResponse> {
   // License enforcement: if user has a license context, validate it
-  const licenseCtx = await resolveLicenseContext(userId);
+  const licenseCtx = await resolveLicenseContext(userId, body.deviceId);
   if (licenseCtx) {
     const { license, group } = licenseCtx;
-    // Build a minimal device registration for validation
+    // Use the real device registration when available (carries lastSyncAt for
+    // frequency throttling); fall back to a synthetic one on first sync.
     const deviceReg: DeviceRegistration = licenseCtx.device ?? {
       deviceId: body.deviceId,
       groupId: group.id,
@@ -327,12 +332,17 @@ export async function handleSessionReport(
         session.stepLog.push({
           step: 12,
           phase: "verify",
-          action: "marker_mismatch_warning",
+          action: "marker_mismatch",
           deviceId: "server",
           timestamp: new Date().toISOString(),
           details: { masterMarker, slaveMarker },
-          status: "warning",
+          status: "error",
         });
+        // #11: hard-fail instead of a soft warning — a mismatch means the two
+        // devices ended up with divergent data; the session MUST NOT complete.
+        session.status = "failed";
+        session.errorMessage = "marker_mismatch";
+        return;
       }
     }
 

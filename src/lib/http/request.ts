@@ -1,5 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { badRequest, payloadTooLarge, unsupportedMediaType } from "@/lib/http/error";
+import { assertJsonStructure, type JsonStructureLimits } from "@/lib/http/json-guard";
 
 export interface ParsedJsonBody {
   body: unknown;
@@ -10,6 +11,7 @@ export interface ParsedJsonBody {
 export async function parseJsonBody(
   request: Request,
   maxBytes: number,
+  structureLimits?: JsonStructureLimits,
 ): Promise<ParsedJsonBody> {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("application/json")) {
@@ -51,9 +53,14 @@ export async function parseJsonBody(
     }
 
     try {
-      return { body: JSON.parse(raw) as unknown, rawBytes, compressedBytes };
-    } catch {
-      throw badRequest("Invalid JSON body", "invalid_json");
+      const parsed = JSON.parse(raw) as unknown;
+      if (structureLimits) assertJsonStructure(parsed, structureLimits);
+      return { body: parsed, rawBytes, compressedBytes };
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw badRequest("Invalid JSON body", "invalid_json");
+      }
+      throw error;
     }
   }
 
@@ -80,19 +87,31 @@ export async function parseJsonBody(
   }
 
   try {
-    return { body: JSON.parse(raw) as unknown, rawBytes };
-  } catch {
-    throw badRequest("Invalid JSON body", "invalid_json");
+    const parsed = JSON.parse(raw) as unknown;
+    if (structureLimits) assertJsonStructure(parsed, structureLimits);
+    return { body: parsed, rawBytes };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw badRequest("Invalid JSON body", "invalid_json");
+    }
+    throw error;
   }
 }
 
 export function getClientIp(request: Request): string | null {
+  // Trust the platform-injected header first (Vercel sets x-real-ip at the edge).
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
+
+  // Fallback: the LAST (right-most) XFF entry is the hop appended by the trusted
+  // proxy. Left-most entries are client-controlled and MUST NOT be trusted.
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) {
-    const first = forwardedFor.split(",")[0]?.trim();
-    if (first) return first;
+    const parts = forwardedFor.split(",");
+    const last = parts[parts.length - 1]?.trim();
+    if (last) return last;
   }
-  return request.headers.get("x-real-ip");
+  return null;
 }
 
 function getFirstForwardedHeaderValue(request: Request, header: string): string | null {

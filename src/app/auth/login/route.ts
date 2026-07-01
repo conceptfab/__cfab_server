@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   LEGACY_SYNC_DASHBOARD_AUTH_COOKIE,
   SYNC_DASHBOARD_AUTH_COOKIE,
-  buildDashboardAuthCookieValue,
+  buildDashboardSessionCookieValue,
   getDashboardAuthCookieOptions,
   validateDashboardCredentials,
 } from "@/lib/auth/dashboard-page-auth";
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   const response = redirectTo(request, "/");
   response.cookies.set(
     SYNC_DASHBOARD_AUTH_COOKIE,
-    buildDashboardAuthCookieValue(validation.userId, token),
+    buildDashboardSessionCookieValue(validation.userId),
     getDashboardAuthCookieOptions(),
   );
   response.cookies.set(

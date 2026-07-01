@@ -11,6 +11,7 @@ import {
 } from "@/lib/sync/license-store";
 import { getOrCreateRequestId, REQUEST_ID_HEADER } from "@/lib/observability/request-id";
 import { getClientIp, parseJsonBody } from "@/lib/http/request";
+import { buildCorsHeaders } from "@/lib/http/cors";
 import { log } from "@/lib/observability/logger";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 
@@ -19,15 +20,16 @@ export async function POST(request: Request) {
   const headers = {
     [REQUEST_ID_HEADER]: requestId,
     "cache-control": "no-store",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type, x-request-id",
+    ...buildCorsHeaders(request, "POST, OPTIONS"),
   };
 
   try {
-    // Rate limit: 5 attempts per minute per IP
+    // Rate limit: 5 attempts per minute per IP. fail-closed: brute-force
+    // protection on license keys takes priority over availability.
     const clientIp = getClientIp(request) ?? "unknown";
-    const rl = checkRateLimit(`license-activate:${clientIp}`, 5, 60_000);
+    const rl = await checkRateLimit(`license-activate:${clientIp}`, 5, 60_000, {
+      failureMode: "fail-closed",
+    });
     if (!rl.allowed) {
       throw tooManyRequests(`Rate limit exceeded. Try again in ${Math.ceil(rl.retryAfterMs / 1000)}s.`);
     }
@@ -111,13 +113,9 @@ export async function POST(request: Request) {
   }
 }
 
-export async function OPTIONS() {
+export async function OPTIONS(request: Request) {
   return new NextResponse(null, {
     status: 204,
-    headers: {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "POST, OPTIONS",
-      "access-control-allow-headers": "content-type, x-request-id",
-    },
+    headers: buildCorsHeaders(request, "POST, OPTIONS"),
   });
 }

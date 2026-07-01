@@ -7,6 +7,8 @@ import { findDeviceByToken } from "@/lib/sync/license-store";
 export interface SyncAuthContext {
   userId: string;
   method: "token" | "device-token" | "dev-body-userid";
+  /** deviceId z tokenu urządzenia; null dla env-token / dev-fallback. */
+  tokenDeviceId: string | null;
 }
 
 function safeStringEqual(left: string, right: string): boolean {
@@ -69,10 +71,12 @@ function resolveUserByToken(token: string): string | null {
   return null;
 }
 
-async function resolveUserByDeviceToken(token: string): Promise<string | null> {
+async function resolveUserByDeviceToken(
+  token: string,
+): Promise<{ userId: string; deviceId: string } | null> {
   const result = await findDeviceByToken(token);
   if (!result) return null;
-  return result.group.ownerId;
+  return { userId: result.group.ownerId, deviceId: result.device.deviceId };
 }
 
 export async function authenticateSyncRequest(
@@ -96,28 +100,53 @@ export async function authenticateSyncRequest(
       if (bodyUserId && bodyUserId !== envUserId) {
         throw forbidden("Body userId does not match token user", "user_mismatch");
       }
-      return { userId: envUserId, method: "token" };
+      return { userId: envUserId, method: "token", tokenDeviceId: null };
     }
 
     // 2. Fallback: check device tokens from license-store
     // Device tokens prove the device is registered (authentication).
     // Always use the group owner's userId — never trust bodyUserId for device tokens
     // to prevent unauthorized access to other users' data.
-    const deviceUserId = await resolveUserByDeviceToken(token);
-    if (deviceUserId) {
-      if (bodyUserId && bodyUserId !== deviceUserId) {
+    const deviceAuth = await resolveUserByDeviceToken(token);
+    if (deviceAuth) {
+      if (bodyUserId && bodyUserId !== deviceAuth.userId) {
         throw forbidden("Body userId does not match device owner", "user_mismatch");
       }
-      return { userId: deviceUserId, method: "device-token" };
+      return {
+        userId: deviceAuth.userId,
+        method: "device-token",
+        tokenDeviceId: deviceAuth.deviceId,
+      };
     }
 
     throw unauthorized("Invalid API token", "invalid_token");
   }
 
   if (env.syncAllowInsecureDevUserIdFallback && bodyUserId) {
-    return { userId: bodyUserId, method: "dev-body-userid" };
+    return { userId: bodyUserId, method: "dev-body-userid", tokenDeviceId: null };
   }
 
   throw unauthorized("Missing Bearer token");
+}
+
+/**
+ * Egzekwuje spójność body.deviceId z tożsamością tokenu urządzenia.
+ * - device-token: body.deviceId MUSI == tokenDeviceId, inaczej 403.
+ * - token / dev-body-userid: tokenDeviceId == null → pomiń (env-token operuje
+ *   w imieniu właściciela grupy i może adresować dowolne urządzenie).
+ */
+export function assertDeviceIdBinding(
+  auth: SyncAuthContext,
+  bodyDeviceId: string | null | undefined,
+): void {
+  if (auth.tokenDeviceId === null) {
+    return;
+  }
+  if (!bodyDeviceId || bodyDeviceId !== auth.tokenDeviceId) {
+    throw forbidden(
+      "Body deviceId does not match device token",
+      "device_id_mismatch",
+    );
+  }
 }
 
