@@ -122,6 +122,8 @@ export interface AsyncPushBody {
   keyScheme?: E2eKeyScheme;
   /** Optional: base64 KDF salt (required when keyScheme = "v2-passphrase"). */
   keySalt?: string | null;
+  /** Optional: device reports E2E v2 capability (has a group passphrase). */
+  supportsV2?: boolean;
 }
 
 export interface AsyncPushResponse {

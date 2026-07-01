@@ -242,6 +242,7 @@ model LicenseDevice {
   lastSyncAt     DateTime? @map("last_sync_at")
   lastMarkerHash String?   @map("last_marker_hash")
   isFixedMaster  Boolean   @default(false) @map("is_fixed_master")
+  supportsV2     Boolean   @default(false) @map("supports_v2")
 
   @@index([licenseId], map: "license_devices_license_id_idx")
   @@index([groupId], map: "license_devices_group_id_idx")

@@ -21,6 +21,7 @@ import type {
 } from "./license-contracts";
 import { PLAN_DEFAULTS } from "./license-contracts";
 import { generateLicenseKey } from "./license-keygen";
+import { computeGroupV2Readiness, type GroupV2Status } from "./migration";
 
 // ---------------------------------------------------------------------------
 // State store backed by Postgres (Prisma). All entities previously lived in
@@ -76,6 +77,7 @@ function mapDevice(row: PrismaLicenseDevice): DeviceRegistration {
     lastSyncAt: row.lastSyncAt ? row.lastSyncAt.toISOString() : null,
     lastMarkerHash: row.lastMarkerHash ?? null,
     isFixedMaster: row.isFixedMaster,
+    supportsV2: row.supportsV2 ?? false,
   };
 }
 
@@ -352,6 +354,34 @@ export async function touchDeviceLastSeen(deviceId: string): Promise<void> {
     where: { deviceId },
     data: { lastSeenAt: new Date() },
   });
+}
+
+/**
+ * Record a device's E2E v2 capability (has a group passphrase). Fire-and-forget;
+ * also refreshes lastSeenAt so migration readiness reflects current activity.
+ */
+export async function recordDeviceCapability(
+  deviceId: string,
+  supportsV2: boolean,
+): Promise<void> {
+  await prisma.licenseDevice.updateMany({
+    where: { deviceId },
+    data: { supportsV2, lastSeenAt: new Date() },
+  });
+}
+
+/**
+ * Fleet migration readiness for a group: whether all active devices are v2-capable.
+ * Used to safely auto-accept v2 packages once a group has fully migrated.
+ */
+export async function getGroupKeySchemeStatus(groupId: string): Promise<GroupV2Status> {
+  const rows = await prisma.licenseDevice.findMany({
+    where: { groupId },
+    select: { lastSeenAt: true, supportsV2: true },
+  });
+  return computeGroupV2Readiness(
+    rows.map((r) => ({ lastSeenAt: r.lastSeenAt.toISOString(), supportsV2: r.supportsV2 })),
+  );
 }
 
 /**

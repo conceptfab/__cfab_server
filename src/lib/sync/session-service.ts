@@ -130,6 +130,7 @@ export async function handleSessionCreate(
       lastSyncAt: null,
       lastMarkerHash: null,
       isFixedMaster: group.fixedMasterDeviceId === body.deviceId,
+      supportsV2: false,
     };
     validateLicenseForSync(license, group, deviceReg, body.deviceId);
   }

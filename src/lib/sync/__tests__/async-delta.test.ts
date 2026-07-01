@@ -13,11 +13,14 @@ const state = {
   deliveries: [] as { packageId: string; deviceId: string }[],
   activeDevices: ["devA", "devB"] as string[],
   groups: [{ id: "G1", ownerId: "owner1" }] as any[],
+  groupStatus: { activeDevices: 1, v2Capable: 0, allV2: false },
 };
 
 vi.mock("../license-store", () => ({
   getAllGroups: vi.fn(async () => state.groups),
   getStorageBackend: vi.fn(async () => null),
+  recordDeviceCapability: vi.fn(async () => {}),
+  getGroupKeySchemeStatus: vi.fn(async () => state.groupStatus),
 }));
 
 vi.mock("../session-store", () => ({
@@ -83,6 +86,7 @@ beforeEach(() => {
   state.packages = [];
   state.deliveries = [];
   state.activeDevices = ["devA", "devB"];
+  state.groupStatus = { activeDevices: 1, v2Capable: 0, allV2: false };
 });
 
 describe("async-delta pending filter", () => {
@@ -163,6 +167,21 @@ describe("async-delta v2 gate (SYNC_ALLOW_E2E_V2)", () => {
     await expect(
       handleAsyncPush("owner1", { ...v2Body, keyScheme: "v9-bogus" as never }),
     ).rejects.toMatchObject({ code: "unsupported_key_scheme" });
+  });
+
+  it("passes the v2 gate per-group when the fleet is allV2 (flag off)", async () => {
+    vi.stubEnv("SYNC_ALLOW_E2E_V2", "false");
+    state.groupStatus = { activeDevices: 2, v2Capable: 2, allV2: true };
+    // Gate is passed via per-group readiness; push then fails later on storage
+    // resolution (no backend in this harness) — NOT on the key-scheme gate.
+    let err: unknown;
+    try {
+      await handleAsyncPush("owner1", v2Body);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect((err as { code?: string }).code).not.toBe("key_scheme_not_supported_yet");
   });
 });
 

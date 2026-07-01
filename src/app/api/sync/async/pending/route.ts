@@ -8,6 +8,7 @@ import { badRequest } from "@/lib/http/error";
 interface PendingBody {
   deviceId: string;
   groupId: string;
+  supportsV2?: boolean;
 }
 
 export async function OPTIONS(request: Request) {
@@ -28,10 +29,11 @@ export async function POST(request: Request) {
       return {
         deviceId: body.deviceId,
         groupId: body.groupId,
+        supportsV2: typeof body.supportsV2 === "boolean" ? body.supportsV2 : undefined,
       };
     },
     getBodyUserId: () => null,
     getDeviceId: (body) => body.deviceId,
-    execute: ({ userId, body }) => handleAsyncPending(userId, body.deviceId, body.groupId),
+    execute: ({ userId, body }) => handleAsyncPending(userId, body.deviceId, body.groupId, body.supportsV2 ?? false),
   });
 }

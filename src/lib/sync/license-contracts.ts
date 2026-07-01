@@ -90,6 +90,8 @@ export interface DeviceRegistration {
   lastSyncAt: string | null;
   lastMarkerHash: string | null;
   isFixedMaster: boolean;
+  /** Whether the device reported E2E v2 capability (has a group passphrase). */
+  supportsV2: boolean;
 }
 
 // ---------------------------------------------------------------------------

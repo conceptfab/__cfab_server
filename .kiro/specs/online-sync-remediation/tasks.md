@@ -66,7 +66,7 @@ synchronizacji online `__cfab_server`. Legenda: `[x]` zrobione i zweryfikowane
     Testy bramki 3/3 (off→odrzuca, on bez keySalt→błąd, zły schemat→błąd). Serwer 90/90.
   - _Requirements: 1.7, 1.8_
 
-- [ ] 11. Demon: KDF v2 + passphrase (`__cfab_demon`) — W TOKU
+- [x] 11. Demon: KDF v2 + passphrase (`__cfab_demon`)
   - [x] 11.1 Parytetowy `deriveGroupDataKeyV2` (WebCrypto PBKDF2, 600k/32B) w
     `dashboard/src/lib/tauri/online-sync.ts` + test golden-vector (parytet z Node/serwerem).
   - [x] 11.2 Model dwóch kluczy w Rust (`online_async_delta.rs` + `config.rs`):
@@ -79,18 +79,25 @@ synchronizacji online `__cfab_server`. Legenda: `[x]` zrobione i zweryfikowane
     z passphrase). Wpięty w obie ścieżki zapisu (`useSyncSettings`/`useSettingsFormState`) +
     pole `groupPassphrase` w web `OnlineSyncSettings`. Testy 14/14, tsc/eslint czyste.
     Inertne (v1) dopóki UI nie ustawi passphrase.
-  - [ ] 11.4 UI (model B): przy parowaniu 1. urządzenie losuje passphrase (przycisk „Generuj"),
-    eksport (QR/plik/kopiuj) + import na kolejnych (`OnlineSyncLicenseSection.tsx`) + wpisy i18n.
-    ZROBIONE: codec portable-secret `group-secret-codec.ts` (`encodeGroupSecret`/`decodeGroupSecret`,
-    prefiks TFGK1 + CRC16 wykrywający literówki/ucięcia) + testy 5/5.
-    POZOSTAJE: widget React (Generuj/Kopiuj/Eksport-QR/Import) w `OnlineSyncLicenseSection.tsx`
-    + przewleczenie propsów (parent → useSyncSettings `groupPassphrase`) + wpisy i18n we wszystkich
-    lokalizacjach. Weryfikacja e2e możliwa po włączeniu `SYNC_ALLOW_E2E_V2` na środowisku testowym.
+  - [x] 11.4 UI (model B): passphrase w `OnlineSyncLicenseSection.tsx`.
+    `PassphraseSection`: Generuj/Generuj-ponownie/Usuń, kod eksportu (`encodeGroupSecret`) +
+    Kopiuj, pole importu (`decodeGroupSecret`) z walidacją CRC; props przewleczone
+    (`groupPassphrase`/`onGroupPassphraseChange`) przez `OnlineSyncCardProps` → `SettingsSyncTab`
+    → `updateOnlineSyncSettings`. Codec `group-secret-codec.ts` (5/5). Klucze i18n en+pl
+    (`settings.license.passphrase_*`), lint:locales OK. Dashboard 142/142, tsc/eslint czyste.
+    UWAGA: weryfikacja wizualna + e2e (2 urządzenia, `SYNC_ALLOW_E2E_V2=true`) do zrobienia w aplikacji.
   - _Requirements: 1.1, 1.3, 1.4_
 
 - [ ] 12. Migracja floty v1→v2 (fazy 0–3 z design.md)
-  - Współistnienie v1/v2, negocjacja per grupa, telemetria braku v1, deprecjacja v1.
-  - _Requirements: 1.6, 1.7_
+  ZROBIONE (kod): telemetria zdolności — urządzenia raportują `supportsV2` (mają passphrase)
+  przy push/pending; serwer zapisuje `LicenseDevice.supports_v2` (Prisma + migracja
+  `20260701010000_device_supports_v2`). Czysta funkcja `computeGroupV2Readiness` + `getGroupKeySchemeStatus`
+  (aktywne okno 30 dni, allV2 = wszystkie aktywne v2-capable). Per-grupa auto-akceptacja v2
+  (bez globalnej flagi) gdy `allV2`; `SYNC_ALLOW_E2E_V2` = override/kill-switch. Rust: `supportsV2`
+  w push/pending. Testy: migration 5/5, async-delta v2 gate/auto-allow, Rust serializacja. Serwer 96, demon 147.
+  POZOSTAJE (ops): wdrożenie migracji DB, deprecjacja v1 po telemetryjnym zaniku v1 w oknie 72h,
+  weryfikacja e2e na realnej grupie.
+  _Requirements: 1.6, 1.7_
 
 ### WS-E — Hardening
 

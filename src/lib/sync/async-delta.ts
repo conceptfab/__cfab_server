@@ -21,7 +21,7 @@ import {
   getSenderCleanablePackages,
   supersedeOwnPendingPackages,
 } from "./session-store";
-import { getStorageBackend, getAllGroups } from "./license-store";
+import { getStorageBackend, getAllGroups, recordDeviceCapability, getGroupKeySchemeStatus } from "./license-store";
 import { createStorageAdapter, getGlobalStorageAdapter } from "./sftp-manager";
 import type { StorageAdapter } from "./sftp-manager";
 import { encryptCredentialsWithFileKey, deriveGroupKey, isE2eKeyScheme } from "./storage-encryption";
@@ -71,22 +71,6 @@ export async function handleAsyncPush(
   if (body.keyScheme !== undefined && !isE2eKeyScheme(body.keyScheme)) {
     throw badRequest(`Unsupported keyScheme: ${String(body.keyScheme)}`, "unsupported_key_scheme");
   }
-  let keySalt: string | null = null;
-  if (keyScheme === "v2-passphrase") {
-    // Gated behind SYNC_ALLOW_E2E_V2 so v2 packages only appear once a group's
-    // fleet can decrypt them (prevents v1 pullers failing). Server crypto for
-    // creds is unchanged (v1); v2 only affects the client-held data key.
-    if (!getEnv().syncAllowE2eV2) {
-      throw badRequest(
-        "v2-passphrase E2E is not enabled on this server (set SYNC_ALLOW_E2E_V2 after fleet migration)",
-        "key_scheme_not_supported_yet",
-      );
-    }
-    if (typeof body.keySalt !== "string" || body.keySalt.trim().length === 0) {
-      throw badRequest("keySalt is required for keyScheme=v2-passphrase", "key_salt_required");
-    }
-    keySalt = body.keySalt;
-  }
 
   // Verify group exists and user has access
   const groups = await getAllGroups();
@@ -96,6 +80,33 @@ export async function handleAsyncPush(
   }
   if (group.ownerId !== userId) {
     throw new Error("Not authorized for this group");
+  }
+
+  // Fleet-migration telemetry (#12): record this device's v2 capability, then read
+  // the group's readiness so v2 can be auto-accepted once the whole fleet is capable.
+  await recordDeviceCapability(deviceId, body.supportsV2 === true).catch(() => {});
+
+  let keySalt: string | null = null;
+  if (keyScheme === "v2-passphrase") {
+    const status = await getGroupKeySchemeStatus(groupId);
+    // Accept v2 when the global override is on OR the group's active fleet is fully
+    // v2-capable — otherwise a v1-only device would fail to decrypt a v2 package.
+    if (!getEnv().syncAllowE2eV2 && !status.allV2) {
+      throw badRequest(
+        "v2-passphrase E2E not enabled for this group yet (fleet not fully migrated)",
+        "key_scheme_not_supported_yet",
+      );
+    }
+    if (typeof body.keySalt !== "string" || body.keySalt.trim().length === 0) {
+      throw badRequest("keySalt is required for keyScheme=v2-passphrase", "key_salt_required");
+    }
+    keySalt = body.keySalt;
+    log("info", "async-delta.v2-accepted", {
+      groupId,
+      deviceId,
+      allV2: status.allV2,
+      activeDevices: status.activeDevices,
+    });
   }
 
   // Check for existing pending package from this device → force pull first
@@ -195,6 +206,7 @@ export async function handleAsyncPending(
   userId: string,
   deviceId: string,
   groupId: string,
+  supportsV2 = false,
 ): Promise<AsyncPendingResponse> {
   // Verify access
   const groups = await getAllGroups();
@@ -202,6 +214,10 @@ export async function handleAsyncPending(
   if (!group || group.ownerId !== userId) {
     throw new Error("Not authorized for this group");
   }
+
+  // Fleet-migration telemetry (#12): pullers report capability too, so group
+  // readiness reflects the full active fleet (not only pushers).
+  await recordDeviceCapability(deviceId, supportsV2).catch(() => {});
 
   const packages = await getPendingPackagesForGroup(groupId, deviceId);
 

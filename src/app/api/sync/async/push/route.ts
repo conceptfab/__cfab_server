@@ -34,6 +34,7 @@ export async function POST(request: Request) {
         fileSizeBytes: body.fileSizeBytes,
         keyScheme: typeof body.keyScheme === "string" ? (body.keyScheme as AsyncPushBody["keyScheme"]) : undefined,
         keySalt: typeof body.keySalt === "string" ? body.keySalt : null,
+        supportsV2: typeof body.supportsV2 === "boolean" ? body.supportsV2 : undefined,
       };
     },
     getBodyUserId: () => null,
